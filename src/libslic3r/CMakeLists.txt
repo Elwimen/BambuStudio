@@ -139,6 +139,8 @@ set(lisbslic3r_sources
     Fill/FillRadialZigZag.hpp
     Fill/FillFloatingConcentric.hpp
     Fill/FillFloatingConcentric.cpp
+    Fill/FillArcOverhang.hpp
+    Fill/FillArcOverhang.cpp
     Flow.cpp
     Flow.hpp
     Frustum.cpp

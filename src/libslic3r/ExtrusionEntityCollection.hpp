@@ -31,18 +31,21 @@ public:
 
     ExtrusionEntitiesPtr entities;     // we own these entities
     bool no_sort;
+    // Arc overhang toolpaths: printed in order, before the walls of the island (see GCode::extrude_arc_overhangs).
+    bool arc_overhang = false;
 
     std::pair<int, int> loop_node_range;
     ExtrusionEntityCollection(): no_sort(false) {}
-    ExtrusionEntityCollection(const ExtrusionEntityCollection &other) : no_sort(other.no_sort), is_reverse(other.is_reverse), loop_node_range(other.loop_node_range) { this->append(other.entities); }
+    ExtrusionEntityCollection(const ExtrusionEntityCollection &other) : no_sort(other.no_sort), arc_overhang(other.arc_overhang), is_reverse(other.is_reverse), loop_node_range(other.loop_node_range) { this->append(other.entities); }
     ExtrusionEntityCollection(ExtrusionEntityCollection &&other)
-        : entities(std::move(other.entities)), no_sort(other.no_sort), is_reverse(other.is_reverse), loop_node_range(other.loop_node_range) {}
+        : entities(std::move(other.entities)), no_sort(other.no_sort), arc_overhang(other.arc_overhang), is_reverse(other.is_reverse), loop_node_range(other.loop_node_range) {}
     explicit ExtrusionEntityCollection(const ExtrusionPaths &paths);
     ExtrusionEntityCollection& operator=(const ExtrusionEntityCollection &other);
     ExtrusionEntityCollection& operator=(ExtrusionEntityCollection &&other)
     {
         this->entities = std::move(other.entities);
         this->no_sort  = other.no_sort;
+        this->arc_overhang = other.arc_overhang;
         is_reverse     = other.is_reverse;
         loop_node_range = other.loop_node_range;
         return *this;

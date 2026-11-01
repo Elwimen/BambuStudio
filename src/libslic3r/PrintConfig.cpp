@@ -269,6 +269,15 @@ static t_config_enum_values s_keys_map_ConformalPole {
 };
 CONFIG_OPTION_ENUM_DEFINE_STATIC_MAPS(ConformalPole)
 
+static t_config_enum_values s_keys_map_ArcOverhangAbovePattern {
+    { "default",           int(ArcOverhangAbovePattern::Default) },
+    { "concentric",        int(ArcOverhangAbovePattern::Concentric) },
+    { "hilbertcurve",      int(ArcOverhangAbovePattern::HilbertCurve) },
+    { "archimedeanchords", int(ArcOverhangAbovePattern::ArchimedeanChords) },
+    { "octagramspiral",    int(ArcOverhangAbovePattern::OctagramSpiral) }
+};
+CONFIG_OPTION_ENUM_DEFINE_STATIC_MAPS(ArcOverhangAbovePattern)
+
 //BBS:
 static t_config_enum_values s_keys_map_TopOneWallType {
     {"not apply", int(TopOneWallType::None)},
@@ -1553,6 +1562,140 @@ void PrintConfigDef::init_fff_params()
     def->max = 2.0;
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionFloat(1));
+
+    def = this->add("enable_arc_overhangs", coBool);
+    def->label = L("Arc overhangs");
+    def->category = L("Quality");
+    def->tooltip = L("Experimental. Fill unsupported bottom areas with concentric arcs that grow out of the supported edge "
+                     "instead of straight bridge lines. Each arc rests on the previous one, so steep overhangs up to 90 degrees "
+                     "can be printed without support. Arcs are printed before the walls of the layer, very slowly and with the "
+                     "bridge fan. Works best with PLA, low temperature and maximum part cooling.\n"
+                     "Based on arc-overhang by Steven McCulloch and the PrusaSlicer integration by Nicolai Wachenschwan.");
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionBool(false));
+
+    def = this->add("arc_overhang_flow_ratio", coFloat);
+    def->label = L("Arc overhang flow");
+    def->category = L("Quality");
+    def->tooltip = L("Flow multiplier for arc overhangs, applied on top of the thick bridge flow (a round line one nozzle "
+                     "diameter wide, scaled by Bridge flow). Arcs hang in the air and need extra material to bond to the "
+                     "previous arc: raise it if arcs separate or have gaps, lower it if they blob or curl up.");
+    def->min = 0.5;
+    def->max = 2.0;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(1));
+
+    def = this->add("arc_overhang_min_speed", coFloat);
+    def->label = L("Arc overhang minimum");
+    def->category = L("Speed");
+    def->tooltip = L("Lowest speed used when short arcs are slowed down to meet the minimum arc time.");
+    def->sidetext = L("mm/s");
+    def->min = 0.1;
+    def->max = 50;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(0.5));
+
+    def = this->add("arc_overhang_min_arc_time", coFloat);
+    def->label = L("Arc overhang minimum arc time");
+    def->category = L("Speed");
+    def->tooltip = L("Short arcs (near the center of each fan of arcs) are slowed down so that each one takes at least this long, "
+                     "giving it time to cool before the next arc is laid on it. 0 disables.");
+    def->sidetext = L("s");
+    def->min = 0;
+    def->max = 30;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(3));
+
+    def = this->add("arc_overhang_travel_speed", coFloat);
+    def->label = L("Arc overhang travel");
+    def->category = L("Speed");
+    def->tooltip = L("Travel speed between arcs. Fast moves right next to fresh, unsupported arcs can knock them loose. 0 uses the normal travel speed.");
+    def->sidetext = L("mm/s");
+    def->min = 0;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(30));
+
+    def = this->add("arc_overhang_above_height", coFloat);
+    def->label = L("Arc overhang: special layers above");
+    def->category = L("Quality");
+    def->tooltip = L("Height above arc overhangs that is printed with the special speeds and fan speed below, to reduce warping of "
+                     "the layers resting on the arcs. Applies to extrusions within 5 mm of the arcs. 0 disables.");
+    def->sidetext = L("mm");
+    def->min = 0;
+    def->max = 20;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(3));
+
+    def = this->add("arc_overhang_above_wall_speed", coFloat);
+    def->label = L("Walls above arc overhangs");
+    def->category = L("Speed");
+    def->tooltip = L("Maximum speed of walls printed on and near arc overhangs (see Arc overhang: special layers above). 0 disables.");
+    def->sidetext = L("mm/s");
+    def->min = 0;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(3));
+
+    def = this->add("arc_overhang_above_infill_speed", coFloat);
+    def->label = L("Infill above arc overhangs");
+    def->category = L("Speed");
+    def->tooltip = L("Maximum speed of infill and other non-wall extrusions printed on and near arc overhangs (see Arc overhang: special layers above). 0 disables.");
+    def->sidetext = L("mm/s");
+    def->min = 0;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(10));
+
+    def = this->add("arc_overhang_above_fan_speed", coInt);
+    def->label = L("Arc overhang: fan above");
+    def->category = L("Quality");
+    def->tooltip = L("Part cooling fan speed for whole layers within the special height above arc overhangs, replacing the layer-time "
+                     "based fan speed (these slow layers would otherwise often get no fan at all). Less cooling lets these layers shrink "
+                     "less and pull the arcs up less. Overhang walls still use the overhang fan. -1 keeps the normal fan logic.");
+    def->sidetext = "%";
+    def->min = -1;
+    def->max = 100;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionInt(10));
+
+    def = this->add("arc_overhang_extra_layers", coInt);
+    def->label = L("Arc overhang: extra arc layers");
+    def->category = L("Quality");
+    def->tooltip = L("Number of layers above an arc overhang that are printed as arcs too, over the same area. Each extra layer "
+                     "starts its arcs from a different point on the supported edge, so its arcs cross the ones below, making the "
+                     "overhang much stiffer before regular infill is pressed onto it.");
+    def->min = 0;
+    def->max = 3;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionInt(0));
+
+    def = this->add("arc_overhang_above_pattern", coEnum);
+    def->label = L("Arc overhang: solid infill pattern above");
+    def->category = L("Quality");
+    def->tooltip = L("Pattern of the internal solid infill printed on and near arc overhangs, within the special layers above. "
+                     "Long straight lines push the whole overhang like a lever; Hilbert curve (used by the original arc overhang "
+                     "script) and the other patterns keep the nozzle moves short and local. Top surfaces are not changed.");
+    def->enum_keys_map = &ConfigOptionEnum<ArcOverhangAbovePattern>::get_enum_values();
+    def->enum_values.push_back("default");
+    def->enum_values.push_back("concentric");
+    def->enum_values.push_back("hilbertcurve");
+    def->enum_values.push_back("archimedeanchords");
+    def->enum_values.push_back("octagramspiral");
+    def->enum_labels.push_back(L("Default"));
+    def->enum_labels.push_back(L("Concentric"));
+    def->enum_labels.push_back(L("Hilbert Curve"));
+    def->enum_labels.push_back(L("Archimedean Chords"));
+    def->enum_labels.push_back(L("Octagram Spiral"));
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionEnum<ArcOverhangAbovePattern>(ArcOverhangAbovePattern::Default));
+
+    def = this->add("arc_overhang_speed", coFloat);
+    def->label = L("Arc overhang");
+    def->category = L("Speed");
+    def->tooltip = L("Print speed of arc overhangs. Arcs only hold their shape when printed very slowly; 1 to 3 mm/s is typical.");
+    def->sidetext = L("mm/s");
+    def->min = 0.1;
+    def->max = 50;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(2));
 
     def = this->add("counterbore_hole_bridging", coEnum);
     def->label = L("Bridge counterbore holes");

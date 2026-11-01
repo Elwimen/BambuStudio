@@ -15,6 +15,9 @@
 #include "FillConcentricInternal.hpp"
 #include "FillConcentric.hpp"
 #include "FillFloatingConcentric.hpp"
+#include "FillArcOverhang.hpp"
+
+#include <boost/log/trivial.hpp>
 
 #define NARROW_INFILL_AREA_THRESHOLD 3
 
@@ -269,7 +272,6 @@ std::vector<SurfaceFill> group_fills(const Layer &layer, LockRegionParam &lock_p
                         params.pattern = region_config.internal_solid_infill_pattern.value;
                     else if (surface.is_external() && !is_bridge) {
                         params.pattern = surface.is_top() ? region_config.top_surface_pattern.value : region_config.bottom_surface_pattern.value;
-                        params.density = surface.is_top() ? region_config.top_surface_density.value : region_config.bottom_surface_density.value;
                     } else
 						params.pattern = region_config.top_surface_pattern == ipMonotonic ? ipMonotonic : ipRectilinear;
                     if (params.pattern == ipMonotonicLine || params.pattern == ipGlobalMonotonicLine)
@@ -637,6 +639,144 @@ void Layer::set_outlook_range(LockRegionParam &lock_param){
     }
 }
 // friend to Layer
+// ---------------------------------------------------------------------------------------------
+// Arc overhangs
+//
+// Planned before infill (PrintObject::infill), because extra arc layers and the special treatment of
+// the layers above depend on the arcs of the layers below, while make_fills runs on all layers in
+// parallel. make_fills then turns the planned arcs into no_sort extrusion collections flagged
+// arc_overhang, which GCode prints before the walls of the island.
+// ---------------------------------------------------------------------------------------------
+
+static void record_arc_overhang_above(Layer &layer, const PrintRegionConfig &region_config, const ExPolygons &areas)
+{
+    // Record for the layers printed above (special speeds / fan / pattern).
+    Layer::ArcOverhangAbove &above = layer.arc_overhang;
+    const bool first = above.areas.empty();
+    append(above.areas, areas);
+    above.height = std::max(above.height, double(region_config.arc_overhang_above_height.value));
+    auto min_cap = [first](double cur, double v) { return first ? v : (cur <= 0. ? v : (v <= 0. ? cur : std::min(cur, v))); };
+    above.wall_speed   = min_cap(above.wall_speed, region_config.arc_overhang_above_wall_speed.value);
+    above.infill_speed = min_cap(above.infill_speed, region_config.arc_overhang_above_infill_speed.value);
+    const int fan = region_config.arc_overhang_above_fan_speed.value;
+    if (fan >= 0)
+        above.fan_speed = above.fan_speed < 0 ? fan : std::min(above.fan_speed, fan);
+}
+
+// level 0: arcs over unsupported bottom bridges. level n > 0: n-th extra arc layer over the arcs of the layer below.
+std::vector<Layer::ArcOverhangPlan> Layer::plan_arc_overhangs(int level) const
+{
+    std::vector<ArcOverhangPlan> out;
+    if (this->lower_layer == nullptr || this->id() == 0)
+        return out;
+
+    const double min_area = 2. * scale_(1.) * scale_(1.); // 2 mm^2
+    for (size_t region_id = 0; region_id < m_regions.size(); ++region_id) {
+        const LayerRegion       &layerm        = *m_regions[region_id];
+        const PrintRegionConfig &region_config = layerm.region().config();
+        if (!region_config.enable_arc_overhangs || (level > 0 && region_config.arc_overhang_extra_layers.value < level))
+            continue;
+
+        const ExPolygons region_slices  = to_expolygons(layerm.slices.surfaces);
+        const Flow       perimeter_flow = layerm.flow(frExternalPerimeter);
+        const double     nozzle         = layerm.bridging_flow(frSolidInfill, true).nozzle_diameter();
+        const float      perimeter_w    = float(perimeter_flow.scaled_width());
+
+        ArcOverhangParams params;
+        params.spacing                 = coord_t(scale_(nozzle * 0.95));
+        params.r_min_start             = coord_t(scale_(nozzle));
+        params.center_offset           = coord_t(scale_(2.));
+        params.r_min                   = params.center_offset + coord_t(double(params.spacing) / 1.5);
+        params.r_max                   = coord_t(scale_(50.));
+        params.max_dist_from_perimeter = coord_t(2.f * perimeter_w);
+        params.max_segment_length      = coord_t(scale_(0.3));
+
+        // region: area to fill with arcs, core: part that must be covered for the arcs to be used.
+        struct Job { ExPolygon region; ExPolygon core; bool avoid; Point avoid_point; };
+        std::vector<Job> jobs;
+        Polygons         anchor;
+        if (level == 0) {
+            ExPolygons bridges;
+            for (const Surface &surface : layerm.fill_surfaces.surfaces)
+                if (surface.surface_type == stBottomBridge)
+                    bridges.emplace_back(surface.expolygon);
+            if (bridges.empty())
+                continue;
+            anchor = to_polygons(this->lower_layer->lslices);
+            ExPolygons unsupported = opening_ex(diff_ex(region_slices, offset(anchor, float(scale_(0.05)))), 0.5f * perimeter_w);
+            for (const ExPolygon &u : unsupported) {
+                if (u.area() < min_area || intersection_ex(u, bridges).empty())
+                    continue;
+                // Extend into the supported area so the first arcs are anchored and the arcs reach under the walls.
+                ExPolygons extended = intersection_ex(offset_ex(u, 1.5f * perimeter_w), region_slices);
+                if (extended.empty())
+                    continue;
+                const ExPolygon &region = *std::max_element(extended.begin(), extended.end(),
+                    [](const ExPolygon &a, const ExPolygon &b) { return a.area() < b.area(); });
+                jobs.push_back({ region, u, false, Point() });
+            }
+        } else {
+            for (const ArcOverhangPlan &below : this->lower_layer->arc_plans)
+                if (below.region_id == region_id && below.level == level - 1) {
+                    anchor = below.anchor;
+                    for (size_t i = 0; i < below.areas.size(); ++i)
+                        for (ExPolygon &e : intersection_ex(below.areas[i], region_slices))
+                            if (e.area() >= min_area)
+                                jobs.push_back({ e, e, true, below.start_points[i] });
+                }
+        }
+        if (jobs.empty())
+            continue;
+
+        ArcOverhangPlan plan;
+        plan.region_id = region_id;
+        plan.level     = level;
+        plan.anchor    = anchor;
+        for (const Job &job : jobs) {
+            params.avoid_start = job.avoid;
+            params.avoid_point = job.avoid_point;
+            ArcOverhangArcs arcs = generate_arc_overhang(job.region, anchor, params);
+            if (arcs.arcs.empty()) {
+                BOOST_LOG_TRIVIAL(warning) << "Arc overhangs: no starting edge found at z=" << this->print_z << ", using regular infill";
+                continue;
+            }
+            double uncovered = 0.;
+            for (const ExPolygon &e : intersection_ex(arcs.remaining, job.core))
+                uncovered += e.area();
+            if (uncovered > 0.1 * job.core.area()) {
+                BOOST_LOG_TRIVIAL(warning) << "Arc overhangs: only " << int(100. * (1. - uncovered / job.core.area())) << "% covered at z=" << this->print_z
+                                           << " (arc layer " << level << "), using regular infill";
+                continue;
+            }
+            plan.areas.push_back(job.region);
+            plan.arcs.push_back(std::move(arcs.arcs));
+            plan.start_points.push_back(arcs.start_point);
+        }
+        if (!plan.areas.empty())
+            out.push_back(std::move(plan));
+    }
+    return out;
+}
+
+void Layer::add_arc_overhang_plans(std::vector<ArcOverhangPlan> &&plans)
+{
+    for (ArcOverhangPlan &plan : plans) {
+        record_arc_overhang_above(*this, m_regions[plan.region_id]->region().config(), plan.areas);
+        arc_plans.push_back(std::move(plan));
+    }
+}
+
+static InfillPattern arc_above_infill_pattern(ArcOverhangAbovePattern p)
+{
+    switch (p) {
+    case ArcOverhangAbovePattern::Concentric:        return ipConcentric;
+    case ArcOverhangAbovePattern::HilbertCurve:      return ipHilbertCurve;
+    case ArcOverhangAbovePattern::ArchimedeanChords: return ipArchimedeanChords;
+    case ArcOverhangAbovePattern::OctagramSpiral:    return ipOctagramSpiral;
+    default:                                         return ipCount;
+    }
+}
+
 void Layer::make_fills(FillAdaptive::Octree* adaptive_fill_octree, FillAdaptive::Octree* support_fill_octree, FillLightning::Generator* lightning_generator)
 {
 	for (LayerRegion *layerm : m_regions)
@@ -648,6 +788,66 @@ void Layer::make_fills(FillAdaptive::Octree* adaptive_fill_octree, FillAdaptive:
     LockRegionParam lock_param;
     set_outlook_range(lock_param);
     std::vector<SurfaceFill>     surface_fills = group_fills(*this, lock_param);
+
+    // Arc overhangs planned for this layer (see plan_arc_overhangs).
+    if (!arc_plans.empty()) {
+        ExPolygons arc_areas;
+        for (const ArcOverhangPlan &plan : arc_plans) {
+            LayerRegion             &layerm         = *m_regions[plan.region_id];
+            const Flow               arc_flow       = layerm.bridging_flow(frSolidInfill, true);
+            const double             arc_mm3_per_mm = arc_flow.mm3_per_mm() * layerm.region().config().arc_overhang_flow_ratio.value;
+            for (const Polylines &arcs : plan.arcs) {
+                auto *eec         = new ExtrusionEntityCollection();
+                eec->no_sort      = true;
+                eec->arc_overhang = true;
+                eec->entities.reserve(arcs.size());
+                for (const Polyline &pl : arcs) {
+                    auto *path     = new ExtrusionPath(erBridgeInfill, arc_mm3_per_mm, arc_flow.width(), arc_flow.height());
+                    path->polyline = pl;
+                    path->set_reverse();
+                    eec->entities.emplace_back(path);
+                }
+                layerm.fills.entities.emplace_back(eec);
+            }
+            append(arc_areas, plan.areas);
+        }
+        // The arcs replace any other infill there; leftovers would only be thin strips next to the arcs.
+        const Polygons clip = offset(arc_areas, float(scale_(0.05)));
+        for (SurfaceFill &surface_fill : surface_fills)
+            surface_fill.expolygons = opening_ex(diff_ex(surface_fill.expolygons, clip), float(0.5 * surface_fill.params.flow.scaled_width()));
+    }
+
+    // Layers resting on arc overhangs: optional solid infill pattern with short, local moves.
+    {
+        Polygons zone;
+        for (const Layer *l = this->lower_layer; l != nullptr; l = l->lower_layer) {
+            const double dz = this->print_z - l->print_z;
+            if (dz > 20. + EPSILON)
+                break;
+            if (!l->arc_overhang.areas.empty() && l->arc_overhang.height > 0. && dz <= l->arc_overhang.height + EPSILON)
+                append(zone, offset(l->arc_overhang.areas, float(scale_(5.))));
+        }
+        if (!zone.empty()) {
+            zone = union_(zone);
+            std::vector<SurfaceFill> split;
+            for (SurfaceFill &surface_fill : surface_fills) {
+                if (surface_fill.params.extrusion_role != erSolidInfill || surface_fill.region_id >= m_regions.size())
+                    continue;
+                const InfillPattern pattern = arc_above_infill_pattern(m_regions[surface_fill.region_id]->region().config().arc_overhang_above_pattern.value);
+                if (pattern == ipCount || pattern == surface_fill.params.pattern)
+                    continue;
+                ExPolygons inside = intersection_ex(surface_fill.expolygons, zone);
+                if (inside.empty())
+                    continue;
+                surface_fill.expolygons = diff_ex(surface_fill.expolygons, zone);
+                SurfaceFill above(surface_fill);
+                above.params.pattern = pattern;
+                above.expolygons     = std::move(inside);
+                split.emplace_back(std::move(above));
+            }
+            append(surface_fills, std::move(split));
+        }
+    }
     const Slic3r::BoundingBox bbox 			= this->object()->bounding_box();
     const auto                resolution 	= this->object()->print()->config().resolution.value;
 #ifdef SLIC3R_DEBUG_SLICE_PROCESSING

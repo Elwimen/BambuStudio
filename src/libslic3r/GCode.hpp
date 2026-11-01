@@ -505,6 +505,7 @@ private:
 
     std::string     extrude_perimeters(const Print &print, const std::vector<ObjectByExtruder::Island::Region> &by_region);
     std::string     extrude_infill(const Print &print, const std::vector<ObjectByExtruder::Island::Region> &by_region, bool ironing);
+    std::string     extrude_arc_overhangs(const Print &print, const std::vector<ObjectByExtruder::Island::Region> &by_region);
     std::string     extrude_support(const ExtrusionEntityCollection &support_fills);
 
     std::string travel_to(const Point &point, ExtrusionRole role, std::string comment, double z = DBL_MAX);
@@ -539,6 +540,19 @@ private:
        methods. */
     Vec2d                               m_origin;
     FullPrintConfig                     m_config;
+    // Set while GCode::extrude_arc_overhangs() runs; arcs use arc_overhang_speed.
+    bool                                m_printing_arc_overhang { false };
+    // Area near arc overhangs of lower layers whose extrusions are slowed down (cached per object layer).
+    struct ArcAboveZone {
+        bool        active { false };
+        ExPolygons  zone;
+        BoundingBox bbox;
+        double      wall_speed { 0. };
+        double      infill_speed { 0. };
+        int         fan_speed { -1 };
+    };
+    std::map<const Layer*, ArcAboveZone> m_arc_above_zones;
+    const ArcAboveZone&                 arc_above_zone(const Layer *layer);
     DynamicConfig                       m_calib_config;
     // scaled G-code resolution
     double                              m_scaled_resolution;

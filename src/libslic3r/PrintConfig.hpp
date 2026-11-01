@@ -101,6 +101,15 @@ enum class ConformalStagger {
     Count,
 };
 
+// Solid infill pattern used on the layers resting on arc overhangs.
+enum class ArcOverhangAbovePattern {
+    Default,
+    Concentric,
+    HilbertCurve,
+    ArchimedeanChords,
+    OctagramSpiral
+};
+
 enum class ConformalPole {
     Layer,
     Axis,
@@ -555,6 +564,7 @@ CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(InfillPattern)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(IroningType)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(ConformalStagger)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(ConformalPole)
+CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(ArcOverhangAbovePattern)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(SlicingMode)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(SupportMaterialPattern)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(SupportMaterialStyle)
@@ -1098,6 +1108,18 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionEnum<CounterboreHoleBridgingOption>, counterbore_hole_bridging))
     ((ConfigOptionFloatsNullable, overhang_totally_speed))
     ((ConfigOptionFloatsNullable, bridge_speed))
+    ((ConfigOptionBool, enable_arc_overhangs))
+    ((ConfigOptionFloat, arc_overhang_speed))
+    ((ConfigOptionFloat, arc_overhang_flow_ratio))
+    ((ConfigOptionFloat, arc_overhang_min_speed))
+    ((ConfigOptionFloat, arc_overhang_min_arc_time))
+    ((ConfigOptionFloat, arc_overhang_travel_speed))
+    ((ConfigOptionFloat, arc_overhang_above_height))
+    ((ConfigOptionFloat, arc_overhang_above_wall_speed))
+    ((ConfigOptionFloat, arc_overhang_above_infill_speed))
+    ((ConfigOptionInt,   arc_overhang_above_fan_speed))
+    ((ConfigOptionInt,   arc_overhang_extra_layers))
+    ((ConfigOptionEnum<ArcOverhangAbovePattern>, arc_overhang_above_pattern))
     ((ConfigOptionEnum<EnsureVerticalThicknessLevel>, ensure_vertical_shell_thickness))
     ((ConfigOptionEnum<InfillPattern>, top_surface_pattern))
     ((ConfigOptionEnum<InfillPattern>, bottom_surface_pattern))
