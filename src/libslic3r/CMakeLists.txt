@@ -141,6 +141,8 @@ set(lisbslic3r_sources
     Fill/FillFloatingConcentric.cpp
     Fill/FillArcOverhang.hpp
     Fill/FillArcOverhang.cpp
+    GCode/ContourZ.hpp
+    GCode/ContourZ.cpp
     Flow.cpp
     Flow.hpp
     Frustum.cpp

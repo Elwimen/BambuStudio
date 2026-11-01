@@ -1056,7 +1056,7 @@ static std::vector<std::string> s_Preset_print_options {
     "support_angle", "support_interface_top_layers", "support_interface_bottom_layers",
     "support_interface_pattern", "support_interface_spacing", "support_interface_loop_pattern",
     "support_top_z_distance", "support_on_build_plate_only","support_critical_regions_only", "support_remove_small_overhang",
-    "bridge_no_support", "thick_bridges", "enable_arc_overhangs", "arc_overhang_speed", "arc_overhang_flow_ratio", "arc_overhang_min_speed", "arc_overhang_min_arc_time", "arc_overhang_travel_speed", "arc_overhang_above_height", "arc_overhang_above_wall_speed", "arc_overhang_above_infill_speed", "arc_overhang_above_fan_speed", "arc_overhang_extra_layers", "arc_overhang_above_pattern", "max_bridge_length", "print_sequence",
+    "bridge_no_support", "thick_bridges", "enable_arc_overhangs", "arc_overhang_speed", "arc_overhang_flow_ratio", "arc_overhang_min_speed", "arc_overhang_min_arc_time", "arc_overhang_travel_speed", "arc_overhang_above_height", "arc_overhang_above_wall_speed", "arc_overhang_above_infill_speed", "arc_overhang_above_fan_speed", "arc_overhang_extra_layers", "arc_overhang_above_pattern", "zaa_enabled", "zaa_min_z", "zaa_minimize_perimeter_height", "zaa_top_order", "zaa_top_pattern", "max_bridge_length", "print_sequence",
     "filename_format", "wall_filament", "support_bottom_z_distance",
     "sparse_infill_filament", "solid_infill_filament", "support_filament", "support_interface_filament","support_interface_not_for_body",
     "ooze_prevention", "standby_temperature_delta", "interface_shells", "line_width", "initial_layer_line_width",

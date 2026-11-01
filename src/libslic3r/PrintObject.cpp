@@ -1715,7 +1715,8 @@ bool PrintObject::invalidate_state_by_config_options(
             || opt_key == "arc_overhang_above_infill_speed"
             || opt_key == "arc_overhang_above_fan_speed"
             || opt_key == "arc_overhang_extra_layers"
-            || opt_key == "arc_overhang_above_pattern") {
+            || opt_key == "arc_overhang_above_pattern"
+            || opt_key == "zaa_top_pattern") {
             steps.emplace_back(posInfill);
         } else if (opt_key == "sparse_infill_pattern"
                    || opt_key == "conformal_infill"
@@ -1774,6 +1775,9 @@ bool PrintObject::invalidate_state_by_config_options(
                 steps.emplace_back(posSlice);
             steps.emplace_back(posPerimeters);
             steps.emplace_back(posSupportMaterial);
+        } else if (opt_key == "zaa_enabled" || opt_key == "zaa_min_z") {
+            // Z contouring moves the slicing plane (new_layers()).
+            steps.emplace_back(posSlice);
         } else if (opt_key == "bridge_flow") {
             steps.emplace_back(posPerimeters);
             steps.emplace_back(posInfill);
@@ -1812,6 +1816,8 @@ bool PrintObject::invalidate_state_by_config_options(
             || opt_key == "arc_overhang_min_speed"
             || opt_key == "arc_overhang_min_arc_time"
             || opt_key == "arc_overhang_travel_speed"
+            || opt_key == "zaa_minimize_perimeter_height"
+            || opt_key == "zaa_top_order"
             || opt_key == "outer_wall_speed"
             || opt_key == "small_perimeter_speed"
             || opt_key == "small_perimeter_threshold"

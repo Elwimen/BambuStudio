@@ -272,6 +272,15 @@ std::vector<SurfaceFill> group_fills(const Layer &layer, LockRegionParam &lock_p
                         params.pattern = region_config.internal_solid_infill_pattern.value;
                     else if (surface.is_external() && !is_bridge) {
                         params.pattern = surface.is_top() ? region_config.top_surface_pattern.value : region_config.bottom_surface_pattern.value;
+                        if (surface.is_top() && region_config.zaa_enabled) {
+                            // Z contouring: optional own top pattern (like the ironing pattern).
+                            static const InfillPattern zaa_patterns[] = { ipCount, ipConcentric, ipRectilinear, ipMonotonic, ipMonotonicLine,
+                                                                          ipAlignedRectilinear, ipHilbertCurve, ipArchimedeanChords, ipOctagramSpiral };
+                            const InfillPattern p = zaa_patterns[int(region_config.zaa_top_pattern.value)];
+                            if (p != ipCount)
+                                params.pattern = p;
+                        }
+                        params.density = surface.is_top() ? region_config.top_surface_density.value : region_config.bottom_surface_density.value;
                     } else
 						params.pattern = region_config.top_surface_pattern == ipMonotonic ? ipMonotonic : ipRectilinear;
                     if (params.pattern == ipMonotonicLine || params.pattern == ipGlobalMonotonicLine)

@@ -923,6 +923,11 @@ void ConfigManipulation::apply_null_fff_config(DynamicPrintConfig *config, std::
 
 void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig *config, int variant_index, const bool is_global_config)
 {
+    if (config->has("zaa_enabled")) {
+        const bool zaa = config->opt_bool("zaa_enabled");
+        for (auto el : { "zaa_min_z", "zaa_minimize_perimeter_height", "zaa_top_pattern", "zaa_top_order" })
+            toggle_line(el, zaa);
+    }
     if (config->has("enable_arc_overhangs")) {
         const bool arcs = config->opt_bool("enable_arc_overhangs");
         for (auto el : { "arc_overhang_speed", "arc_overhang_flow_ratio", "arc_overhang_min_speed", "arc_overhang_min_arc_time",

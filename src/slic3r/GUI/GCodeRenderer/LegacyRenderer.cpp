@@ -1670,6 +1670,7 @@ namespace Slic3r {
                 std::vector<MultiIndexBuffer>().swap(indices);
                 // layers zs / roles / extruder ids -> extract from result
                 size_t last_travel_s_id = 0;
+                unsigned int last_layer_index = 0;
                 seams_count = 0;
                 m_extruder_ids.clear();
                 for (size_t i = 0; i < m_moves_count; ++i) {
@@ -1680,8 +1681,17 @@ namespace Slic3r {
                     if (move.type == EMoveType::Extrude) {
                         // layers zs
                         const double* const last_z = m_layers.empty() ? nullptr : &m_layers.get_zs().back();
-                        const double z = static_cast<double>(move.position.z());
-                        if (last_z == nullptr || z < *last_z - EPSILON || *last_z + EPSILON < z)
+                        double z = static_cast<double>(move.position.z());
+                        // Group by the layer change tags when available: Z varies within a layer with Z contouring.
+                        bool new_layer;
+                        if (move.layer_index > 0) {
+                            new_layer = last_z == nullptr || move.layer_index != last_layer_index;
+                            if (move.print_z > 0.f)
+                                z = static_cast<double>(move.print_z);
+                        } else
+                            new_layer = last_z == nullptr || z < *last_z - EPSILON || *last_z + EPSILON < z;
+                        last_layer_index = move.layer_index;
+                        if (new_layer)
                             m_layers.append(z, { last_travel_s_id, move_id });
                         else
                             m_layers.get_endpoints().back().last = move_id;

@@ -278,6 +278,26 @@ static t_config_enum_values s_keys_map_ArcOverhangAbovePattern {
 };
 CONFIG_OPTION_ENUM_DEFINE_STATIC_MAPS(ArcOverhangAbovePattern)
 
+static t_config_enum_values s_keys_map_ZaaTopOrder {
+    { "as_generated", int(ZaaTopOrder::AsGenerated) },
+    { "low_to_high",  int(ZaaTopOrder::LowToHigh) },
+    { "high_to_low",  int(ZaaTopOrder::HighToLow) }
+};
+CONFIG_OPTION_ENUM_DEFINE_STATIC_MAPS(ZaaTopOrder)
+
+static t_config_enum_values s_keys_map_ZaaTopPattern {
+    { "default",            int(ZaaTopPattern::Default) },
+    { "concentric",         int(ZaaTopPattern::Concentric) },
+    { "zig-zag",            int(ZaaTopPattern::Rectilinear) },
+    { "monotonic",          int(ZaaTopPattern::Monotonic) },
+    { "monotonicline",      int(ZaaTopPattern::MonotonicLine) },
+    { "alignedrectilinear", int(ZaaTopPattern::AlignedRectilinear) },
+    { "hilbertcurve",       int(ZaaTopPattern::HilbertCurve) },
+    { "archimedeanchords",  int(ZaaTopPattern::ArchimedeanChords) },
+    { "octagramspiral",     int(ZaaTopPattern::OctagramSpiral) }
+};
+CONFIG_OPTION_ENUM_DEFINE_STATIC_MAPS(ZaaTopPattern)
+
 //BBS:
 static t_config_enum_values s_keys_map_TopOneWallType {
     {"not apply", int(TopOneWallType::None)},
@@ -1655,6 +1675,75 @@ void PrintConfigDef::init_fff_params()
     def->max = 100;
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionInt(10));
+
+    def = this->add("zaa_enabled", coBool);
+    def->label = L("Z contouring");
+    def->category = L("Quality");
+    def->tooltip = L("Experimental. Z anti-aliasing: top surface infill, ironing and walls follow the true model surface by moving "
+                     "the nozzle up and down within the layer, reducing stair-stepping on gently sloped and curved tops (up to "
+                     "about 25 degrees). Layers are sliced near their bottom (see Minimum Z height). Arc fitting is not used for "
+                     "contoured lines. Ported from OrcaSlicer (Z contouring by Aleksandr Dobkin).");
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionBool(false));
+
+    def = this->add("zaa_min_z", coFloat);
+    def->label = L("Minimum Z height");
+    def->category = L("Quality");
+    def->tooltip = L("Minimum local layer height of contoured lines, and the height of the slicing plane above the layer bottom. "
+                     "Lower values allow stronger contouring but leave less material under the lowest points. Top infill may "
+                     "also rise above the nominal layer top by up to this amount; walls are never raised.");
+    def->sidetext = L("mm");
+    def->min = 0;
+    def->max = 1;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(0.05));
+
+    def = this->add("zaa_minimize_perimeter_height", coFloat);
+    def->label = L("Minimize wall height angle");
+    def->category = L("Quality");
+    def->tooltip = L("Lower top-surface walls to the height of the model edge on slopes steeper than this angle. 0 disables.");
+    def->sidetext = u8"°";
+    def->min = 0;
+    def->max = 90;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(35));
+
+    def = this->add("zaa_top_pattern", coEnum);
+    def->label = L("Contoured top surface pattern");
+    def->category = L("Quality");
+    def->tooltip = L("Pattern of top surfaces where Z contouring is enabled, like the ironing pattern for ironing. "
+                     "Concentric and the spirals roughly follow height lines on domes and cones; straight patterns cross "
+                     "the slope. Same as top surface uses the top surface pattern.");
+    def->enum_keys_map = &ConfigOptionEnum<ZaaTopPattern>::get_enum_values();
+    for (const char *v : { "default", "concentric", "zig-zag", "monotonic", "monotonicline", "alignedrectilinear", "hilbertcurve", "archimedeanchords", "octagramspiral" })
+        def->enum_values.push_back(v);
+    def->enum_labels.push_back(L("Same as top surface"));
+    def->enum_labels.push_back(L("Concentric"));
+    def->enum_labels.push_back(L("Rectilinear"));
+    def->enum_labels.push_back(L("Monotonic"));
+    def->enum_labels.push_back(L("Monotonic line"));
+    def->enum_labels.push_back(L("Aligned Rectilinear"));
+    def->enum_labels.push_back(L("Hilbert Curve"));
+    def->enum_labels.push_back(L("Archimedean Chords"));
+    def->enum_labels.push_back(L("Octagram Spiral"));
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionEnum<ZaaTopPattern>(ZaaTopPattern::Default));
+
+    def = this->add("zaa_top_order", coEnum);
+    def->label = L("Contoured top line order");
+    def->category = L("Quality");
+    def->tooltip = L("Order of top surface lines on contoured layers. The flat face of the nozzle drags over lines already printed "
+                     "uphill of the current one; printing from low to high avoids that (each new line is uphill of the previous "
+                     "ones). High to low is the opposite, for comparison. As generated keeps the normal order.");
+    def->enum_keys_map = &ConfigOptionEnum<ZaaTopOrder>::get_enum_values();
+    def->enum_values.push_back("as_generated");
+    def->enum_values.push_back("low_to_high");
+    def->enum_values.push_back("high_to_low");
+    def->enum_labels.push_back(L("As generated"));
+    def->enum_labels.push_back(L("Low to high"));
+    def->enum_labels.push_back(L("High to low"));
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionEnum<ZaaTopOrder>(ZaaTopOrder::LowToHigh));
 
     def = this->add("arc_overhang_extra_layers", coInt);
     def->label = L("Arc overhang: extra arc layers");

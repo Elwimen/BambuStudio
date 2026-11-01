@@ -3311,6 +3311,13 @@ void TabPrint::build()
         optgroup->append_single_option_line("avoid_crossing_wall_includes_support","parameter/quality-advance-settings");
         optgroup->append_single_option_line("z_direction_outwall_speed_continuous", "parameter/quality-advance-settings");
 
+        optgroup = page->new_optgroup(L("Z contouring"), L"param_advanced");
+        optgroup->append_single_option_line("zaa_enabled");
+        optgroup->append_single_option_line("zaa_min_z");
+        optgroup->append_single_option_line("zaa_minimize_perimeter_height");
+        optgroup->append_single_option_line("zaa_top_pattern");
+        optgroup->append_single_option_line("zaa_top_order");
+
     page = add_options_page(L("Strength"), "empty");
         optgroup = page->new_optgroup(L("Walls"), L"param_wall");
         optgroup->append_single_option_line("wall_loops","wall-generator");

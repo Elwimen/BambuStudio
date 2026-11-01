@@ -6076,6 +6076,7 @@ void GCodeProcessor::store_move_vertex(EMoveType type, EMovePathType path_type)
         m_print_z,
         m_pa_line_calibration
     });
+    m_result.moves.back().layer_index = m_layer_id;
 
     if (type == EMoveType::Seam) {
         m_seams_count++;
