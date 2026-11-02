@@ -45,6 +45,10 @@ export const FOOTER_SIDE_WIDTH = 180;
 
 export const FOOTER_GAP = 20;
 
+// Mod: the action buttons now sit on their own centered row below the extruder,
+// this is the vertical gap between the extruder row and the button row.
+export const FOOTER_BUTTONS_ROW_GAP = 8;
+
 // Deliberate deviation from AMSControl, where the option row is flush with the
 // body: on a single-Ext machine the body is only 264 wide, so a flush-left
 // group reads as stranded. The right group stays flush.

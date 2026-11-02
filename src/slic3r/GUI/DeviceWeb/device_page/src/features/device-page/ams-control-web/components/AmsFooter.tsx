@@ -1,5 +1,5 @@
 import { useTranslation } from 'react-i18next';
-import { CONTENT_WIDTH, EXTRUDER, FOOTER_BUTTON, FOOTER_GAP, FOOTER_LEFT_INSET, FOOTER_SIDE_WIDTH, SETTINGS_ICON, px } from '../dip';
+import { CONTENT_WIDTH, EXTRUDER, FOOTER_BUTTON, FOOTER_BUTTONS_ROW_GAP, FOOTER_GAP, SETTINGS_ICON, px } from '../dip';
 import { extruderIconName, extrudersLeftToRight } from '../displayAdapters';
 import { nozzleIconLefts } from '../geometry';
 import type { AmsControlActions, ExtruderArea } from '../types';
@@ -38,12 +38,25 @@ export function AmsFooter({
   const iconLefts = nozzleIconLefts(iconNames);
 
   return (
-    <div className="relative" style={{ width: px(CONTENT_WIDTH), minHeight: px(EXTRUDER.height) }}>
-      {/* minWidth, not width: the internal-build Debug button may push this group past
-          FOOTER_SIDE_WIDTH, and the shipped controls must not be squeezed to fit. */}
+    <div className="relative flex flex-col items-center" style={{ width: px(CONTENT_WIDTH) }}>
+      {/* Row 1: extruder nozzle icon(s) stay where the road overlay expects them. */}
+      <div className="relative" style={{ width: px(CONTENT_WIDTH), height: px(EXTRUDER.height) }}>
+        {extruderArea.visible
+          ? extruders.map((extruder, index) => (
+              <div key={extruder.id} className="absolute top-0" style={{ left: px(iconLefts[index]) }}>
+                <ExtruderIcon
+                  extruder={extruder}
+                  icon={extruderIconName(extruderArea.extruders, extruder)}
+                />
+              </div>
+            ))
+          : null}
+      </div>
+
+      {/* Row 2: all action buttons on their own centered row (Mod). */}
       <div
-        className="absolute top-0 flex items-center"
-        style={{ left: px(FOOTER_LEFT_INSET), minWidth: px(FOOTER_SIDE_WIDTH), gap: px(FOOTER_GAP) }}
+        className="flex items-center justify-center"
+        style={{ gap: px(FOOTER_GAP), marginTop: px(FOOTER_BUTTONS_ROW_GAP) }}
       >
         {actions.show_auto_refill ? (
           <button
@@ -79,23 +92,6 @@ export function AmsFooter({
             {debugOpening ? 'Opening...' : 'Debug'}
           </button>
         ) : null}
-      </div>
-
-      {extruderArea.visible
-        ? extruders.map((extruder, index) => (
-            <div key={extruder.id} className="absolute top-0" style={{ left: px(iconLefts[index]) }}>
-              <ExtruderIcon
-                extruder={extruder}
-                icon={extruderIconName(extruderArea.extruders, extruder)}
-              />
-            </div>
-          ))
-        : null}
-
-      <div
-        className="absolute right-0 top-0 flex items-center justify-end"
-        style={{ width: px(FOOTER_SIDE_WIDTH), gap: px(FOOTER_GAP) }}
-      >
         <button
           type="button"
           data-testid="ams-unload"

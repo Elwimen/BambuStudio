@@ -1998,11 +1998,38 @@ StatusBasePanel::StatusBasePanel(wxWindow *parent, wxWindowID id, const wxPoint 
 
     bSizer_status_below->Add(bSizer_left, 1, wxALL | wxEXPAND, 0);
 
-    auto m_panel_separator_middle = new wxPanel(this, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxBORDER_NONE | wxTAB_TRAVERSAL);
-    m_panel_separator_middle->SetBackgroundColour(STATUS_PANEL_BG);
-    m_panel_separator_middle->SetMinSize(wxSize(PAGE_SPACING, -1));
+    // Draggable divider between the Camera pane (left, flexes with the window) and
+    // the Control pane (right). Dragging adjusts the Control pane's width; the
+    // Camera pane (proportion 1) fills the remainder.
+    m_pane_divider = new wxPanel(this, wxID_ANY, wxDefaultPosition, wxSize(FromDIP(6), -1), wxBORDER_NONE | wxTAB_TRAVERSAL);
+    m_pane_divider->SetBackgroundColour(STATUS_PANEL_BG);
+    m_pane_divider->SetMinSize(wxSize(FromDIP(6), -1));
+    m_pane_divider->SetCursor(wxCursor(wxCURSOR_SIZEWE));
+    bSizer_status_below->Add(m_pane_divider, 0, wxEXPAND | wxALL, 0);
 
-    bSizer_status_below->Add(m_panel_separator_middle, 0, wxEXPAND | wxALL, 0);
+    m_pane_divider->Bind(wxEVT_LEFT_DOWN, [this](wxMouseEvent &e) {
+        m_divider_dragging     = true;
+        m_divider_drag_start_x = m_pane_divider->ClientToScreen(e.GetPosition()).x;
+        m_ctrl_pane_width      = m_machine_ctrl_panel->GetSize().x;
+        if (!m_pane_divider->HasCapture()) m_pane_divider->CaptureMouse();
+    });
+    m_pane_divider->Bind(wxEVT_MOTION, [this](wxMouseEvent &e) {
+        if (!m_divider_dragging) return;
+        int screen_x = m_pane_divider->ClientToScreen(e.GetPosition()).x;
+        int delta    = screen_x - m_divider_drag_start_x;         // drag right => Control shrinks
+        int w        = m_ctrl_pane_width - delta;
+        w            = std::max(FromDIP(360), std::min(FromDIP(980), w));
+        m_machine_ctrl_panel->SetMinSize(wxSize(w, -1));
+        m_machine_ctrl_panel->SetMaxSize(wxSize(w, -1));
+        this->Layout();
+        this->FitInside();
+    });
+    auto end_divider_drag = [this](wxMouseEvent &) {
+        if (m_divider_dragging && m_pane_divider->HasCapture()) m_pane_divider->ReleaseMouse();
+        m_divider_dragging = false;
+    };
+    m_pane_divider->Bind(wxEVT_LEFT_UP, end_divider_drag);
+    m_pane_divider->Bind(wxEVT_MOUSE_CAPTURE_LOST, [this](wxMouseCaptureLostEvent &) { m_divider_dragging = false; });
 
     m_machine_ctrl_panel = new wxPanel(this);
     m_machine_ctrl_panel->SetBackgroundColour(*wxWHITE);
@@ -2011,8 +2038,12 @@ StatusBasePanel::StatusBasePanel(wxWindow *parent, wxWindowID id, const wxPoint 
     m_machine_ctrl_panel->SetSizer(m_machine_control);
     m_machine_ctrl_panel->Layout();
     m_machine_control->Fit(m_machine_ctrl_panel);
+    // Keep the control column at its natural content width so the proportion-1
+    // camera panel can't starve/clip it (title truncates to "Contro", AMS A1 slot
+    // cut off) on wide windows. 586 content box + 2x8 side margins.
+    m_machine_ctrl_panel->SetMinSize(wxSize(FromDIP(602), -1));
 
-    bSizer_status_below->Add(m_machine_ctrl_panel, 0, wxALL, 0);
+    bSizer_status_below->Add(m_machine_ctrl_panel, 0, wxEXPAND | wxALL, 0);
 
     m_panel_separator_right = new wxPanel(this, wxID_ANY, wxDefaultPosition, wxSize(PAGE_SPACING, -1), wxTAB_TRAVERSAL);
     m_panel_separator_right->SetBackgroundColour(STATUS_PANEL_BG);
@@ -2255,35 +2286,35 @@ wxBoxSizer *StatusBasePanel::create_machine_control_page(wxWindow *parent)
     m_parts_btn->SetBackgroundColor(btn_bg_green);
     m_parts_btn->SetBorderColor(btn_bd_green);
     m_parts_btn->SetTextColor(wxColour("#FFFFFE"));
-    m_parts_btn->SetSize(wxSize(FromDIP(128), FromDIP(26)));
+    m_parts_btn->SetSize(wxSize(-1, FromDIP(26)));
     m_parts_btn->SetMinSize(wxSize(-1, FromDIP(26)));
 
     m_options_btn = new Button(m_panel_control_title, _L("Print Options"));
     m_options_btn->SetBackgroundColor(btn_bg_green);
     m_options_btn->SetBorderColor(btn_bd_green);
     m_options_btn->SetTextColor(wxColour("#FFFFFE"));
-    m_options_btn->SetSize(wxSize(FromDIP(128), FromDIP(26)));
+    m_options_btn->SetSize(wxSize(-1, FromDIP(26)));
     m_options_btn->SetMinSize(wxSize(-1, FromDIP(26)));
 
     m_safety_btn = new Button(m_panel_control_title, _L("Safety Options"));
     m_safety_btn->SetBackgroundColor(btn_bg_green);
     m_safety_btn->SetBorderColor(btn_bd_green);
     m_safety_btn->SetTextColor(wxColour("#FFFFFE"));
-    m_safety_btn->SetSize(wxSize(FromDIP(128), FromDIP(26)));
+    m_safety_btn->SetSize(wxSize(-1, FromDIP(26)));
     m_safety_btn->SetMinSize(wxSize(-1, FromDIP(26)));
 
     m_calibration_btn = new Button(m_panel_control_title, _L("Calibration"));
     m_calibration_btn->SetBackgroundColor(btn_bg_green);
     m_calibration_btn->SetBorderColor(btn_bd_green);
     m_calibration_btn->SetTextColor(wxColour("#FFFFFE"));
-    m_calibration_btn->SetSize(wxSize(FromDIP(128), FromDIP(26)));
+    m_calibration_btn->SetSize(wxSize(-1, FromDIP(26)));
     m_calibration_btn->SetMinSize(wxSize(-1, FromDIP(26)));
     m_calibration_btn->EnableTooltipEvenDisabled();
 
     m_options_btn->Hide();
     m_safety_btn->Hide();
 
-    bSizer_control_title->Add(m_staticText_control, 1, wxALIGN_CENTER_VERTICAL | wxLEFT, PAGE_TITLE_LEFT_MARGIN);
+    bSizer_control_title->Add(m_staticText_control, 0, wxALIGN_CENTER_VERTICAL | wxLEFT, PAGE_TITLE_LEFT_MARGIN);
     bSizer_control_title->Add(0, 0, 1, wxEXPAND, 0);
     bSizer_control_title->Add(m_parts_btn, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(10));
     bSizer_control_title->Add(m_options_btn, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(10));
@@ -2331,7 +2362,9 @@ wxBoxSizer *StatusBasePanel::create_machine_control_page(wxWindow *parent)
 #if BBL_ENABLE_AMS_CONTROL_WEB
     m_ams_control_web_panel = new wgtAmsControlWebPanel(parent);
     m_ams_control_web_panel->Hide();
-    bSizer_control->Add(m_ams_control_web_panel, 0, wxALIGN_CENTER | wxLEFT | wxRIGHT, FromDIP(8));
+    // Mod: EXPAND so the web AMS panel fills the Control column width (it scales
+    // its content to fit), instead of a fixed centred 586px block.
+    bSizer_control->Add(m_ams_control_web_panel, 0, wxEXPAND | wxLEFT | wxRIGHT, FromDIP(8));
 #endif
     bSizer_control->Add(0, 0, 0, wxTOP, FromDIP(6));
     bSizer_control->Add(m_filament_load_sizer, 0, wxALIGN_CENTER | wxLEFT | wxRIGHT, FromDIP(8));
@@ -2744,6 +2777,8 @@ StaticBox *StatusBasePanel::create_ams_group(wxWindow *parent)
     m_ams_control_box->SetSizer(sizer_box);
     m_ams_control_box->Layout();
     m_ams_control_box->Fit();
+    // Make the spools+buttons container ~10% taller.
+    m_ams_control_box->SetMinSize(wxSize(FromDIP(586), m_ams_control_box->GetBestSize().y * 11 / 10));
     return m_ams_control_box;
 }
 

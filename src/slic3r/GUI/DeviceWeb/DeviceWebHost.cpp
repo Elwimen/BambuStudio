@@ -599,32 +599,33 @@ static constexpr int kAmsControlWebWidthDip = 586;
 void DeviceWebHost::ApplyAmsControlWebHostSize(int height_dip)
 {
     constexpr int kMinHeightDip = 220;
-    constexpr int kMaxHeightDip = 360;
+    // Mod: was 360 — too short once the action buttons moved to their own row
+    // (plus the requested +50 slack). Give the content room to report its height.
+    constexpr int kMaxHeightDip = 800;
     height_dip = std::clamp(height_dip, kMinHeightDip, kMaxHeightDip);
 
+    const int h = FromDIP(height_dip);
     m_last_logical_content_size = wxSize(kAmsControlWebWidthDip, height_dip);
-    wxSize content_size(FromDIP(kAmsControlWebWidthDip), FromDIP(height_dip));
 
-    if (m_last_reported_content_size != wxDefaultSize) {
-        const int jitter = FromDIP(8);
-        const int dh = content_size.GetHeight() - m_last_reported_content_size.GetHeight();
-        if (dh > -jitter && dh < jitter)
-            return;
-    }
-    if (content_size == m_last_reported_content_size)
+    // Mod: pin only the HEIGHT and let the WIDTH flex with the Control pane. The
+    // page is width:100%, so it fills the pane and scales/centres its own content
+    // to fit (via the divider), instead of being locked to kAmsControlWebWidthDip.
+    const int jitter = FromDIP(8);
+    const int dh     = h - m_last_reported_content_size.GetHeight();
+    if (m_last_reported_content_size != wxDefaultSize && dh > -jitter && dh < jitter)
         return;
 
-    m_last_reported_content_size = content_size;
-    SetMinSize(content_size);
-    SetMaxSize(content_size);
-    SetSize(content_size);
+    m_last_reported_content_size = wxSize(-1, h);
+    SetMinSize(wxSize(-1, h));
+    SetMaxSize(wxSize(-1, h));
+    SetSize(wxSize(GetSize().x, h));
     if (m_device_webview) {
-        m_device_webview->SetMinSize(content_size);
-        m_device_webview->SetMaxSize(content_size);
-        m_device_webview->SetSize(content_size);
+        m_device_webview->SetMinSize(wxSize(-1, h));
+        m_device_webview->SetMaxSize(wxSize(-1, h));
+        m_device_webview->SetSize(wxSize(m_device_webview->GetSize().x, h));
     }
     if (m_content_size_changed_handler)
-        m_content_size_changed_handler(content_size);
+        m_content_size_changed_handler(wxSize(-1, h));
 
     Layout();
     if (auto* parent = GetParent()) {

@@ -127,6 +127,10 @@ private:
     PlayFrame m_frame;
     bool m_frame_is_default_bg = false; // whether m_frame currently holds the default background (guarded by m_ui_mutex)
     double m_zoom = 1.0;   // digital zoom factor for the live view (mouse wheel)
+    double m_pan_x = 0.0;  // pan offset (view px) when zoomed; drag to move around
+    double m_pan_y = 0.0;
+    bool   m_panning = false;
+    wxPoint m_pan_last;
     std::shared_ptr<wxURI> m_url;
     std::atomic<Bambu_Tunnel> m_tunnel{nullptr};
     std::mutex m_mutex;
