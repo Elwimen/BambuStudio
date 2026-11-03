@@ -4718,6 +4718,19 @@ GCode::LayerResult GCode::process_layer(
     // BBS: don't use lazy_raise when enable spiral vase
     gcode += this->change_layer(print_z);  // this will increase m_layer_index
     update_layer_related_config(m_layer_index);
+    {
+        // Layers resting on arc overhangs: limit the part fan for the whole layer (applied by GCodeEditor).
+        m_arc_above_zones.clear();
+        int arc_fan = -1;
+        for (const LayerToPrint &ltp : layers)
+            if (ltp.object_layer != nullptr) {
+                const ArcAboveZone &z = this->arc_above_zone(ltp.object_layer);
+                if (z.active && z.fan_speed >= 0)
+                    arc_fan = arc_fan < 0 ? z.fan_speed : std::min(arc_fan, z.fan_speed);
+            }
+        if (arc_fan >= 0)
+            gcode += ";_ARC_ABOVE_FAN " + std::to_string(arc_fan) + "\n";
+    }
     update_placeholder_parser_with_variant_params();
     m_layer = &layer;
     m_object_layer_over_raft = false;
@@ -5493,6 +5506,8 @@ GCode::LayerResult GCode::process_layer(
                         return false;
                     };
 
+                    // Arc overhangs must be laid down before anything printed on top of them in this layer.
+                    gcode += this->extrude_arc_overhangs(print, by_region_specific);
                     //BBS: for first layer, we always print wall firstly to get better bed adhesive force
                     //This behaviour is same with cura
                     if (is_infill_first && !first_layer) {
@@ -5791,6 +5806,8 @@ GCode::LayerResult GCode::process_layer(
                         }
                         const auto &by_region_specific = entry.region_filter ? subset_storage : src;
 
+                        // Arc overhangs must be laid down before anything printed on top of them in this layer.
+                        gcode += this->extrude_arc_overhangs(print, by_region_specific);
                         if (is_infill_first && !first_layer) {
                             if (!has_wipe_tower && need_insert_timelapse_gcode_for_traditional
                                 && printer_structure == PrinterStructure::psI3
@@ -6528,11 +6545,23 @@ std::string GCode::extrude_infill(const Print &print, const std::vector<ObjectBy
         if (! region.infills.empty()) {
             extrusions.clear();
             extrusions.reserve(region.infills.size());
-            for (ExtrusionEntity *ee : region.infills)
+            for (ExtrusionEntity *ee : region.infills) {
+                auto *eec = dynamic_cast<const ExtrusionEntityCollection*>(ee);
+                if (eec != nullptr && eec->arc_overhang)
+                    continue; // printed by extrude_arc_overhangs()
                 if ((ee->role() == erIroning) == ironing)
                     extrusions.emplace_back(ee);
+            }
             if (! extrusions.empty()) {
                 m_config.apply(print.get_print_region(&region - &by_region.front()).config());
+                // Z contouring: print top surface lines in height order (see zaa_top_order).
+                ExtrusionEntitiesPtr zaa_top;
+                if (!ironing && m_config.zaa_enabled && m_config.zaa_top_order.value != ZaaTopOrder::AsGenerated && m_layer != nullptr &&
+                    m_layer->lower_layer != nullptr) {
+                    auto it = std::stable_partition(extrusions.begin(), extrusions.end(), [](const ExtrusionEntity *ee) { return ee->role() != erTopSolidInfill; });
+                    zaa_top.assign(it, extrusions.end());
+                    extrusions.erase(it, extrusions.end());
+                }
                 chain_and_reorder_extrusion_entities(extrusions, &m_last_pos);
                 for (const ExtrusionEntity *fill : extrusions) {
                     auto *eec = dynamic_cast<const ExtrusionEntityCollection*>(fill);
@@ -6542,7 +6571,128 @@ std::string GCode::extrude_infill(const Print &print, const std::vector<ObjectBy
                     } else
                         gcode += this->extrude_entity(*fill, extrusion_name);
                 }
+                if (!zaa_top.empty())
+                    gcode += this->extrude_zaa_ordered(zaa_top, extrusion_name);
             }
+        }
+    return gcode;
+}
+
+const ZaaMesh* GCode::zaa_mesh(const PrintObject *object)
+{
+    if (object == nullptr || object->model_object() == nullptr)
+        return nullptr;
+    auto it = m_zaa_meshes.find(object);
+    if (it == m_zaa_meshes.end())
+        it = m_zaa_meshes.emplace(object, std::make_unique<ZaaMesh>(*object)).first;
+    return it->second.get();
+}
+
+// Z contouring: the flat face of the nozzle drags over lines printed uphill of the current one, so print the
+// individual top surface lines sorted by their height on the model surface (low to high by default).
+std::string GCode::extrude_zaa_ordered(const ExtrusionEntitiesPtr &entities, const std::string &description)
+{
+    const ZaaMesh *mesh = this->zaa_mesh(m_layer->object());
+    if (mesh == nullptr) {
+        std::string gcode;
+        for (const ExtrusionEntity *ee : entities)
+            gcode += this->extrude_entity(*ee, description);
+        return gcode;
+    }
+    std::vector<std::pair<double, const ExtrusionEntity*>> lines;
+    std::vector<std::unique_ptr<ExtrusionPath>>            strokes; // owns split zig-zag strokes
+    std::function<void(const ExtrusionEntity*)> collect = [&](const ExtrusionEntity *ee) {
+        if (auto *eec = dynamic_cast<const ExtrusionEntityCollection*>(ee)) {
+            for (const ExtrusionEntity *child : eec->entities)
+                collect(child);
+        } else if (auto *path = dynamic_cast<const ExtrusionPath*>(ee); path != nullptr && !ee->is_loop()) {
+            // Zig-zag fills are one continuous path: order its individual strokes.
+            for (Polyline &pl : zaa_split_strokes(path->polyline)) {
+                strokes.emplace_back(std::make_unique<ExtrusionPath>(pl, *path));
+                strokes.back()->polyline.fitting_result.clear();
+                lines.emplace_back(mesh->mean_dz(*m_layer, strokes.back()->polyline), strokes.back().get());
+            }
+        } else
+            lines.emplace_back(mesh->mean_dz(*m_layer, ee->as_polyline()), ee);
+    };
+    for (const ExtrusionEntity *ee : entities)
+        collect(ee);
+    const bool low_to_high = m_config.zaa_top_order.value == ZaaTopOrder::LowToHigh;
+    std::stable_sort(lines.begin(), lines.end(), [low_to_high](const auto &a, const auto &b) { return low_to_high ? a.first < b.first : a.first > b.first; });
+
+    std::string gcode;
+    for (const auto &[height, ee] : lines) {
+        if (ee->can_reverse() && !ee->is_loop()) {
+            std::unique_ptr<ExtrusionEntity> copy(ee->clone());
+            // Paths running up or down the surface (e.g. spirals on a dome) go in the chosen height direction;
+            // otherwise start at the end closer to the nozzle.
+            double dz_first = 0., dz_last = 0.;
+            const bool has_heights = mesh->surface_dz(*m_layer, copy->first_point(), dz_first) && mesh->surface_dz(*m_layer, copy->last_point(), dz_last);
+            if (has_heights && std::abs(dz_last - dz_first) > 0.05) {
+                if (low_to_high ? dz_first > dz_last : dz_first < dz_last)
+                    copy->reverse();
+            } else if ((copy->last_point() - m_last_pos).cast<double>().squaredNorm() < (copy->first_point() - m_last_pos).cast<double>().squaredNorm())
+                copy->reverse();
+            gcode += this->extrude_entity(*copy, description);
+        } else
+            gcode += this->extrude_entity(*ee, description);
+    }
+    return gcode;
+}
+
+// Extrusions within 5 mm of arc overhangs of lower layers, up to the configured height, get special treatment.
+const GCode::ArcAboveZone& GCode::arc_above_zone(const Layer *layer)
+{
+    auto it = m_arc_above_zones.find(layer);
+    if (it != m_arc_above_zones.end())
+        return it->second;
+    ArcAboveZone z;
+    if (layer != nullptr && dynamic_cast<const SupportLayer*>(layer) == nullptr) {
+        Polygons acc;
+        auto min_cap = [](double cur, double v) { return cur <= 0. ? v : (v <= 0. ? cur : std::min(cur, v)); };
+        for (const Layer *l = layer->lower_layer; l != nullptr; l = l->lower_layer) {
+            const double dz = layer->print_z - l->print_z;
+            if (dz > 20. + EPSILON)
+                break;
+            const Layer::ArcOverhangAbove &a = l->arc_overhang;
+            if (a.areas.empty() || a.height <= 0. || dz > a.height + EPSILON)
+                continue;
+            append(acc, offset(a.areas, float(scale_(5.))));
+            z.wall_speed   = min_cap(z.wall_speed, a.wall_speed);
+            z.infill_speed = min_cap(z.infill_speed, a.infill_speed);
+            if (a.fan_speed >= 0)
+                z.fan_speed = z.fan_speed < 0 ? a.fan_speed : std::min(z.fan_speed, a.fan_speed);
+            z.active = true;
+        }
+        if (z.active) {
+            z.zone = union_ex(acc);
+            z.bbox = get_extents(z.zone);
+        }
+    }
+    return m_arc_above_zones.emplace(layer, std::move(z)).first->second;
+}
+
+// Arc overhangs: each arc rests on the one printed before it, so keep the generated order and direction.
+std::string GCode::extrude_arc_overhangs(const Print &print, const std::vector<ObjectByExtruder::Island::Region> &by_region)
+{
+    std::string gcode;
+    for (const ObjectByExtruder::Island::Region &region : by_region)
+        for (const ExtrusionEntity *ee : region.infills) {
+            auto *eec = dynamic_cast<const ExtrusionEntityCollection*>(ee);
+            if (eec == nullptr || !eec->arc_overhang || eec->entities.empty())
+                continue;
+            m_config.apply(print.get_print_region(&region - &by_region.front()).config());
+            // One overhang-fan block for all arcs: per-path markers would switch the fan off on every
+            // short hop between arcs, which a real fan cannot follow.
+            const bool hold_fan = m_enable_cooling_markers && FILAMENT_CONFIG(enable_overhang_bridge_fan);
+            if (hold_fan)
+                gcode += ";_OVERHANG_FAN_START\n";
+            m_printing_arc_overhang = true;
+            for (const ExtrusionEntity *arc : eec->entities)
+                gcode += this->extrude_entity(*arc, "arc overhang");
+            m_printing_arc_overhang = false;
+            if (hold_fan)
+                gcode += ";_OVERHANG_FAN_END\n";
         }
     return gcode;
 }
@@ -7144,17 +7294,46 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
 
     bool do_slowdown_by_height = slowDownByHeight(desiredMaxSpeed, desiredMaxAcc, path);
 
+    // Z contouring of top surfaces (GCode/ContourZ.hpp): per-point Z offsets relative to the layer top.
+    ZaaPoints zaa_pts;
+    if (sloped == nullptr && m_config.zaa_enabled && !m_spiral_vase && m_layer != nullptr && m_layer->lower_layer != nullptr &&
+        zaa_role_eligible(path.role()))
+        if (const ZaaMesh *mesh = this->zaa_mesh(m_layer->object()))
+            zaa_pts = zaa_contour_path(*mesh, *m_layer, path, ZaaParams{ m_config.zaa_min_z.value, m_config.zaa_minimize_perimeter_height.value });
+
     // go to first point of extrusion path
     //BBS: path.first_point is 2D point. But in lazy raise case, lift z is done in travel_to function.
     //Add m_need_change_layer_lift_z when change_layer in case of no lift if m_last_pos is equal to path.first_point() by chance
+    // Arc overhangs: travel gently between fresh, unsupported arcs.
+    const bool cap_arc_travel = m_printing_arc_overhang && m_config.arc_overhang_travel_speed.value > 0.;
+    auto arc_saved_travel_speed   = m_writer.config.travel_speed;
+    auto arc_saved_travel_speed_z = m_writer.config.travel_speed_z;
+    if (cap_arc_travel) {
+        for (auto *opt : { &m_writer.config.travel_speed, &m_writer.config.travel_speed_z })
+            for (double &v : opt->values)
+                if (!std::isnan(v))
+                    v = std::min(v, m_config.arc_overhang_travel_speed.value);
+    }
     if (!m_last_pos_defined || m_last_pos != path.first_point() || m_need_change_layer_lift_z || (sloped != nullptr && !sloped->is_flat())) {
         gcode += this->travel_to(
             path.first_point(),
             path.role(),
             "move to first " + description + " point",
-            sloped == nullptr ? DBL_MAX : get_sloped_z(sloped->slope_begin.z_ratio)
+            sloped != nullptr ? get_sloped_z(sloped->slope_begin.z_ratio) : zaa_pts.empty() ? DBL_MAX : m_nominal_z + zaa_pts.front().dz
         );
         m_need_change_layer_lift_z = false;
+    }
+    if (sloped == nullptr) {
+        // Z contouring: set the start height of a contoured path, or restore the layer height after one
+        // (travel_to() already does both when there is a travel move).
+        const double target_z = zaa_pts.empty() ? m_nominal_z : m_nominal_z + zaa_pts.front().dz;
+        if (std::abs(m_writer.get_position().z() - target_z) > 1e-4 && (!zaa_pts.empty() || m_zaa_z_dirty))
+            gcode += m_writer.travel_to_z(target_z, zaa_pts.empty() ? "reset Z after contouring" : "set Z for contouring");
+        m_zaa_z_dirty = !zaa_pts.empty();
+    }
+    if (cap_arc_travel) {
+        m_writer.config.travel_speed   = arc_saved_travel_speed;
+        m_writer.config.travel_speed_z = arc_saved_travel_speed_z;
     }
 
     // restore travel speed and acceleration
@@ -7329,7 +7508,15 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
             throw Slic3r::InvalidArgument("Invalid speed");
         }
     };
-    if (speed == -1) // not set speed, calc it
+    if (m_printing_arc_overhang && path.role() == erBridgeInfill && m_config.arc_overhang_speed.value > 0) {
+        speed = m_config.arc_overhang_speed.value;
+        // Short arcs: slow down so each arc has time to cool before the next one is laid on it.
+        const double min_arc_time = m_config.arc_overhang_min_arc_time.value;
+        if (min_arc_time > 0.) {
+            const double length = path.polyline.length() * SCALING_FACTOR;
+            speed = std::min(speed, std::max(length / min_arc_time, m_config.arc_overhang_min_speed.value));
+        }
+    } else if (speed == -1) // not set speed, calc it
         calc_speed_by_role();
     else if (speed > EPSILON && is_perimeter(path.role())) {
         // for perimeter, use the min speed of small_perimeter_speed and path_role speed
@@ -7337,6 +7524,22 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
         calc_speed_by_role();
         speed = std::min(previous_speed, speed);
     } //otherwise, keep previous speed in other conditions
+
+    // Layers resting on arc overhangs: slow down extrusions close to the arcs.
+    if (!m_printing_arc_overhang && m_layer != nullptr && speed > 0 && !is_support(path.role()) && path.role() != erIroning) {
+        const ArcAboveZone &z = this->arc_above_zone(m_layer);
+        const double cap = is_perimeter(path.role()) ? z.wall_speed : z.infill_speed;
+        if (z.active && cap > 0. && speed > cap && z.bbox.overlap(get_extents(path.polyline))) {
+            bool near = false;
+            for (const Point &pt : path.polyline.points) {
+                for (const ExPolygon &ex : z.zone)
+                    if (ex.contains(pt)) { near = true; break; }
+                if (near) break;
+            }
+            if (near)
+                speed = cap;
+        }
+    }
 
     //BBS: if not set the speed, then use the filament_max_volumetric_speed directly
     double filament_max_volumetric_speed = FILAMENT_CONFIG(filament_max_volumetric_speed);
@@ -7416,9 +7619,14 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
     // Ironing extrusions mark and command
     if (path.role() == erSupportIroning || path.role() == erIroning) { gcode += "M1031 S1 ;IRONING_EXTRUSIONS_START\n"; }
 
-    if (path.role() != m_last_processor_extrusion_role) {
+    // Z contoured paths get their own feature type in the preview; m_last_processor_extrusion_role keeps the
+    // real role (it drives retraction decisions).
+    const bool zaa_feature = !zaa_pts.empty();
+    if (path.role() != m_last_processor_extrusion_role || zaa_feature != m_last_feature_zaa) {
         m_last_processor_extrusion_role = path.role();
-        sprintf(buf, ";%s%s\n", GCodeProcessor::reserved_tag(GCodeProcessor::ETags::Role).c_str(), ExtrusionEntity::role_to_string(m_last_processor_extrusion_role).c_str());
+        m_last_feature_zaa              = zaa_feature;
+        sprintf(buf, ";%s%s\n", GCodeProcessor::reserved_tag(GCodeProcessor::ETags::Role).c_str(),
+                ExtrusionEntity::role_to_string(zaa_feature ? erZContoured : m_last_processor_extrusion_role).c_str());
         gcode += buf;
     }
 
@@ -7454,8 +7662,8 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
             //BBS: Overhang_threshold_none means Overhang_threshold_1_4 and forcing cooling for all external perimeter
             int overhang_threshold = FILAMENT_CONFIG(overhang_fan_threshold) == Overhang_threshold_none ?
                 Overhang_threshold_none : FILAMENT_CONFIG(overhang_fan_threshold) - 1;
-            if ((FILAMENT_CONFIG(overhang_fan_threshold) == Overhang_threshold_none && path.role() == erExternalPerimeter) || (path.get_overhang_degree() > overhang_threshold ||
-                is_bridge(path.role()))) {
+            if (!m_printing_arc_overhang && ((FILAMENT_CONFIG(overhang_fan_threshold) == Overhang_threshold_none && path.role() == erExternalPerimeter) || (path.get_overhang_degree() > overhang_threshold ||
+                is_bridge(path.role())))) {
                 gcode += ";_OVERHANG_FAN_START\n";
             }
         }
@@ -7516,7 +7724,21 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
         std::string comment = GCodeWriter::full_gcode_comment ? description : "";
         //BBS: use G1 if not enable arc fitting or has no arc fitting result or in spiral_mode mode
         //Attention: G2 and G3 is not supported in spiral_mode mode
-        if (!m_config.enable_arc_fitting ||
+        if (!zaa_pts.empty()) {
+            // Z contoured extrusion: Z per point, flow scaled by the local layer thickness.
+            for (size_t i = 1; i < zaa_pts.size(); ++i) {
+                const ZaaPoint &a = zaa_pts[i - 1], &b = zaa_pts[i];
+                const Vec2d     dxy((b.p - a.p).cast<double>() * SCALING_FACTOR);
+                const double    length = std::sqrt(dxy.squaredNorm() + (b.dz - a.dz) * (b.dz - a.dz));
+                if (length < EPSILON)
+                    continue;
+                path_length += length;
+                const double ratio = path.role() == erIroning || path.height <= 0 ? 1. : std::max(0., (path.height + b.dz) / path.height);
+                const Vec2d  dest2d = this->point_to_gcode(b.p);
+                gcode += m_writer.extrude_to_xyz(Vec3d(dest2d.x(), dest2d.y(), m_nominal_z + b.dz), e_per_mm * length * ratio, comment);
+                check_and_insert_timelapse(b.p);
+            }
+        } else if (!m_config.enable_arc_fitting ||
             path.polyline.fitting_result.empty() ||
             m_config.spiral_mode ||
             sloped != nullptr) {
@@ -7613,8 +7835,8 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
             //BBS: Overhang_threshold_none means Overhang_threshold_1_4 and forcing cooling for all external perimeter
             int overhang_threshold = FILAMENT_CONFIG(overhang_fan_threshold) == Overhang_threshold_none ?
                 Overhang_threshold_none : FILAMENT_CONFIG(overhang_fan_threshold) - 1;
-            if ((FILAMENT_CONFIG(overhang_fan_threshold) == Overhang_threshold_none && path.role() == erExternalPerimeter) || (path.get_overhang_degree() > overhang_threshold ||
-                is_bridge(path.role())))
+            if (!m_printing_arc_overhang && ((FILAMENT_CONFIG(overhang_fan_threshold) == Overhang_threshold_none && path.role() == erExternalPerimeter) || (path.get_overhang_degree() > overhang_threshold ||
+                is_bridge(path.role()))))
                 gcode += ";_OVERHANG_FAN_END\n";
         }
     }

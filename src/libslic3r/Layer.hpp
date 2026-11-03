@@ -161,6 +161,30 @@ public:
     // These lslices are also used to detect overhangs and overlaps between successive layers, therefore it is important
     // that the 1st lslice is not compensated by the Elephant foot compensation algorithm.
     ExPolygons 				 lslices;
+    // Arc overhangs generated on this layer (filled by make_fills) and the settings for the layers printed above them.
+    struct ArcOverhangAbove {
+        ExPolygons areas;
+        double     height       { 0. }; // mm above this layer, 0 = off
+        double     wall_speed   { 0. }; // mm/s cap, 0 = none
+        double     infill_speed { 0. }; // mm/s cap, 0 = none
+        int        fan_speed    { -1 }; // %, -1 = unchanged
+    };
+    ArcOverhangAbove         arc_overhang;
+    // Arcs planned for this layer, one entry per region and arc level (0 = arc overhang, n = n-th extra arc layer).
+    struct ArcOverhangPlan {
+        size_t                 region_id { 0 };
+        int                    level     { 0 };
+        ExPolygons             areas;        // one per arc set
+        std::vector<Polylines> arcs;         // in print order, one per area
+        Points                 start_points; // center of the first arcs, one per area
+        Polygons               anchor;       // supported area the arcs start from
+    };
+    std::vector<ArcOverhangPlan> arc_plans;
+    // Computes the arc plans of the given level without modifying this layer (runs in parallel with the
+    // other layers, which read arc_plans of their lower layer); commit them with add_arc_overhang_plans().
+    std::vector<ArcOverhangPlan> plan_arc_overhangs(int level) const;
+    void                     add_arc_overhang_plans(std::vector<ArcOverhangPlan> &&plans);
+    void                     clear_arc_overhangs() { arc_plans.clear(); arc_overhang = ArcOverhangAbove(); }
     ExPolygons 				 lslices_extrudable;  // BBS: the extrudable part of lslices used for tree support
     std::vector<BoundingBox> lslices_bboxes;
 

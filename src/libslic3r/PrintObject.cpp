@@ -1167,6 +1167,27 @@ void PrintObject::infill()
             FillRadialZigZag::reset_n_lock();
         }
 
+        {
+            // Arc overhangs: plan level by level, each extra arc layer needs the arcs of the layer below.
+            int extra_levels = 0;
+            for (const PrintRegion &region : this->all_regions())
+                if (region.config().enable_arc_overhangs)
+                    extra_levels = std::max(extra_levels, region.config().arc_overhang_extra_layers.value);
+            for (Layer *layer : m_layers)
+                layer->clear_arc_overhangs();
+            std::vector<std::vector<Layer::ArcOverhangPlan>> pending(m_layers.size());
+            for (int level = 0; level <= extra_levels; ++level) {
+                // Compute in parallel (reads the committed plans of the lower layers only), then commit serially.
+                tbb::parallel_for(tbb::blocked_range<size_t>(0, m_layers.size()), [this, level, &pending](const tbb::blocked_range<size_t> &range) {
+                    for (size_t layer_idx = range.begin(); layer_idx < range.end(); ++layer_idx) {
+                        m_print->throw_if_canceled();
+                        pending[layer_idx] = m_layers[layer_idx]->plan_arc_overhangs(level);
+                    }
+                });
+                for (size_t layer_idx = 0; layer_idx < m_layers.size(); ++layer_idx)
+                    m_layers[layer_idx]->add_arc_overhang_plans(std::move(pending[layer_idx]));
+            }
+        }
         //BOOST_LOG_TRIVIAL(debug) << "Filling layers in parallel - start";
         tbb::parallel_for(
            tbb::blocked_range<size_t>(0, m_layers.size()),
@@ -1686,7 +1707,16 @@ bool PrintObject::invalidate_state_by_config_options(
             || opt_key == "sparse_infill_anchor_max"
             || opt_key == "top_surface_line_width"
             || opt_key == "initial_layer_line_width"
-            || opt_key == "detect_floating_vertical_shell") {
+            || opt_key == "detect_floating_vertical_shell"
+            || opt_key == "enable_arc_overhangs"
+            || opt_key == "arc_overhang_flow_ratio"
+            || opt_key == "arc_overhang_above_height"
+            || opt_key == "arc_overhang_above_wall_speed"
+            || opt_key == "arc_overhang_above_infill_speed"
+            || opt_key == "arc_overhang_above_fan_speed"
+            || opt_key == "arc_overhang_extra_layers"
+            || opt_key == "arc_overhang_above_pattern"
+            || opt_key == "zaa_top_pattern") {
             steps.emplace_back(posInfill);
         } else if (opt_key == "sparse_infill_pattern"
                    || opt_key == "conformal_infill"
@@ -1745,6 +1775,9 @@ bool PrintObject::invalidate_state_by_config_options(
                 steps.emplace_back(posSlice);
             steps.emplace_back(posPerimeters);
             steps.emplace_back(posSupportMaterial);
+        } else if (opt_key == "zaa_enabled" || opt_key == "zaa_min_z") {
+            // Z contouring moves the slicing plane (new_layers()).
+            steps.emplace_back(posSlice);
         } else if (opt_key == "bridge_flow") {
             steps.emplace_back(posPerimeters);
             steps.emplace_back(posInfill);
@@ -1779,6 +1812,12 @@ bool PrintObject::invalidate_state_by_config_options(
             || opt_key == "overhang_4_4_speed"
             || opt_key == "overhang_totally_speed"
             || opt_key == "bridge_speed"
+            || opt_key == "arc_overhang_speed"
+            || opt_key == "arc_overhang_min_speed"
+            || opt_key == "arc_overhang_min_arc_time"
+            || opt_key == "arc_overhang_travel_speed"
+            || opt_key == "zaa_minimize_perimeter_height"
+            || opt_key == "zaa_top_order"
             || opt_key == "outer_wall_speed"
             || opt_key == "small_perimeter_speed"
             || opt_key == "small_perimeter_threshold"

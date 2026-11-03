@@ -389,6 +389,10 @@ std::string GCodeEditor::write_layer_gcode(
     bool ironing_fan_control  = false;
     int  ironing_fan_speed    = 0;
     float pre_start_overhang_fan_time = 0.f;
+    // Layers resting on arc overhangs carry a fan limit marker (see GCode::process_layer).
+    int arc_above_fan = -1;
+    if (size_t pos_arc = gcode.find(";_ARC_ABOVE_FAN "); pos_arc != std::string::npos)
+        arc_above_fan = std::atoi(gcode.c_str() + pos_arc + 16);
 
     enum class SetFanType {
         sfChangingLayer = 0,
@@ -396,7 +400,7 @@ std::string GCodeEditor::write_layer_gcode(
         sfImmediatelyApply
     };
 
-    auto change_extruder_set_fan = [this, layer_id, layer_time, &new_gcode, &overhang_fan_control, &overhang_fan_speed, &ironing_fan_control, &ironing_fan_speed, &pre_start_overhang_fan_time, not_set_additional_fan](SetFanType type) {
+    auto change_extruder_set_fan = [this, layer_id, layer_time, &new_gcode, &overhang_fan_control, &overhang_fan_speed, &ironing_fan_control, &ironing_fan_speed, &pre_start_overhang_fan_time, not_set_additional_fan, arc_above_fan](SetFanType type) {
 #define EXTRUDER_CONFIG(OPT) m_config.OPT.get_at(m_current_extruder)
         int fan_min_speed = EXTRUDER_CONFIG(fan_min_speed);
         int fan_speed_new = EXTRUDER_CONFIG(reduce_fan_stop_start_freq) ? fan_min_speed : 0;
@@ -438,6 +442,10 @@ std::string GCodeEditor::write_layer_gcode(
                 overhang_fan_speed = std::clamp(int(float(first_part_fan) * (1.0f - factor) + float(overhang_fan_speed) * factor + 0.5f), 0, 255);
             }
 
+            // Fixed fan speed, independent of layer time: these layers are slow, and the layer-time logic
+            // would otherwise switch the fan off completely.
+            if (arc_above_fan >= 0)
+                fan_speed_new = arc_above_fan;
             overhang_fan_control= overhang_fan_speed > fan_speed_new;
             ironing_fan_speed   = EXTRUDER_CONFIG(ironing_fan_speed);
             ironing_fan_control = ironing_fan_speed >= 0;

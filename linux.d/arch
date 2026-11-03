@@ -1,0 +1,56 @@
+# Arch / Manjaro dependency profile for BuildLinux.sh
+# (matched to linux.d/debian + linux.d/fedora; Arch ships headers with the
+#  runtime package, so there is no separate -dev split.)
+
+FOUND_GTK3=$(pacman -Qq gtk3 2>/dev/null || true)
+
+REQUIRED_DEV_PACKAGES=(
+    autoconf
+    automake
+    base-devel
+    ninja
+    cmake
+    extra-cmake-modules
+    file
+    gettext
+    git
+    wget
+    gstreamer
+    gst-plugins-base
+    gst-plugins-good
+    gst-plugins-bad
+    libsecret
+    mesa
+    eglexternalplatform
+    glu
+    openssl
+    curl
+    dbus
+    glew
+    systemd-libs
+    libmspack
+    gtk3
+    libxkbcommon
+    libtool
+    libunwind
+    fuse2
+    texinfo
+    nasm
+    yasm
+    x264
+    bzip2
+    wayland
+    wayland-protocols
+    perl
+    m4
+)
+
+if [[ -n "$UPDATE_LIB" ]]
+then
+    REQUIRED_DEV_PACKAGES+=(webkit2gtk-4.1)
+    sudo pacman -Sy --needed --noconfirm "${REQUIRED_DEV_PACKAGES[@]}"
+    echo -e "done\n"
+    exit 0
+fi
+
+FOUND_GTK3_DEV=$(pacman -Qq gtk3 2>/dev/null || true)

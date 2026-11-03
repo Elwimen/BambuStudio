@@ -23,9 +23,16 @@ endif ()
 #     set(_patch_cmd test -f WXWIDGETS_PATCHED || ${PATCH_CMD} ${CMAKE_CURRENT_LIST_DIR}/0001-wxWidget-fix.patch && touch WXWIDGETS_PATCHED)
 # endif ()
 
+# Linux: use the desktop's native file chooser (XDG portal) for wxFileDialog, see the patch.
+set(_wx_patch_cmd "")
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    set(_wx_patch_cmd PATCH_COMMAND sh -c "test -f WX_NATIVE_FC_PATCHED || (${GIT_EXECUTABLE} apply --verbose ${CMAKE_CURRENT_LIST_DIR}/0002-gtk-native-file-chooser.patch && touch WX_NATIVE_FC_PATCHED)")
+endif()
+
 bambustudio_add_cmake_project(wxWidgets
     GIT_REPOSITORY "https://github.com/bambulab/wxWidgets"
     GIT_TAG master
+    ${_wx_patch_cmd}
     DEPENDS ${PNG_PKG} ${ZLIB_PKG} ${EXPAT_PKG} ${TIFF_PKG} ${JPEG_PKG}
     CMAKE_ARGS
         -DCMAKE_POLICY_VERSION_MINIMUM=3.5

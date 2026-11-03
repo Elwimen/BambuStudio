@@ -1,4 +1,7 @@
 #include "MainFrame.hpp"
+#ifdef __WXGTK__
+#include <gtk/gtk.h>
+#endif // __WXGTK__
 #include "GLToolbar.hpp"
 #include <wx/panel.h>
 #include <wx/notebook.h>
@@ -141,6 +144,113 @@ enum class ERescaleTarget
     SettingsDialog
 };
 
+#ifdef __WXGTK__
+// A thin transparent panel placed at a window edge to handle resize.
+// Works regardless of underlying content (GLCanvas3D, wxWebView, etc.)
+// because these panels are Raise()'d above all siblings, so their GDK
+// windows receive pointer events even over WebKit2GTK or GL surfaces.
+class ResizeEdgePanel : public wxPanel
+{
+public:
+    enum Edge { Bottom, Left, Right };
+
+    static constexpr int BORDER_PX = 5;
+
+    ResizeEdgePanel(MainFrame* frame, Edge edge)
+        : wxPanel(frame, wxID_ANY, wxDefaultPosition, wxDefaultSize,
+                  wxBORDER_NONE)
+        , m_frame(frame)
+        , m_edge(edge)
+    {
+        SetBackgroundStyle(wxBG_STYLE_TRANSPARENT);
+        Bind(wxEVT_MOTION,       &ResizeEdgePanel::OnCursorUpdate, this);
+        Bind(wxEVT_ENTER_WINDOW, &ResizeEdgePanel::OnCursorUpdate, this);
+        Bind(wxEVT_LEFT_DOWN,    &ResizeEdgePanel::OnLeftDown,     this);
+        Bind(wxEVT_LEAVE_WINDOW, &ResizeEdgePanel::OnLeave,        this);
+        Bind(wxEVT_PAINT,        &ResizeEdgePanel::OnPaint,        this);
+    }
+
+private:
+    void OnPaint(wxPaintEvent&)
+    {
+        wxPaintDC dc(this);
+        // Transparent — draw nothing
+    }
+
+    GdkWindowEdge get_gdk_edge(const wxPoint& pos) const
+    {
+        wxSize size = GetSize();
+        switch (m_edge) {
+        case Bottom:
+            if (pos.x < BORDER_PX)           return GDK_WINDOW_EDGE_SOUTH_WEST;
+            if (pos.x > size.x - BORDER_PX)  return GDK_WINDOW_EDGE_SOUTH_EAST;
+            return GDK_WINDOW_EDGE_SOUTH;
+        case Left:
+            if (pos.y < BORDER_PX)            return GDK_WINDOW_EDGE_NORTH_WEST;
+            if (pos.y > size.y - BORDER_PX)   return GDK_WINDOW_EDGE_SOUTH_WEST;
+            return GDK_WINDOW_EDGE_WEST;
+        case Right:
+            if (pos.y < BORDER_PX)            return GDK_WINDOW_EDGE_NORTH_EAST;
+            if (pos.y > size.y - BORDER_PX)   return GDK_WINDOW_EDGE_SOUTH_EAST;
+            return GDK_WINDOW_EDGE_EAST;
+        }
+        return GDK_WINDOW_EDGE_SOUTH;
+    }
+
+    void OnCursorUpdate(wxMouseEvent& evt)
+    {
+        GdkWindowEdge edge = get_gdk_edge(evt.GetPosition());
+        const char* name;
+        switch (edge) {
+        case GDK_WINDOW_EDGE_NORTH:       name = "n-resize";  break;
+        case GDK_WINDOW_EDGE_SOUTH:       name = "s-resize";  break;
+        case GDK_WINDOW_EDGE_WEST:        name = "w-resize";  break;
+        case GDK_WINDOW_EDGE_EAST:        name = "e-resize";  break;
+        case GDK_WINDOW_EDGE_NORTH_WEST:  name = "nw-resize"; break;
+        case GDK_WINDOW_EDGE_NORTH_EAST:  name = "ne-resize"; break;
+        case GDK_WINDOW_EDGE_SOUTH_WEST:  name = "sw-resize"; break;
+        case GDK_WINDOW_EDGE_SOUTH_EAST:  name = "se-resize"; break;
+        default:                          name = "s-resize";  break;
+        }
+        if (name == m_last_cursor_name) return;
+        m_last_cursor_name = name;
+
+        GdkDisplay* display = gtk_widget_get_display(m_widget);
+        GdkCursor*  cursor  = gdk_cursor_new_from_name(display, name);
+        if (cursor) {
+            gdk_window_set_cursor(gtk_widget_get_window(m_widget), cursor);
+            g_object_unref(cursor);
+        }
+    }
+
+    void OnLeave(wxMouseEvent&)
+    {
+        m_last_cursor_name = nullptr;
+        gdk_window_set_cursor(gtk_widget_get_window(m_widget), nullptr);
+    }
+
+    void OnLeftDown(wxMouseEvent& evt)
+    {
+        if (m_frame->IsMaximized() || m_frame->IsFullScreen())
+            return;
+
+        GdkWindowEdge edge = get_gdk_edge(evt.GetPosition());
+        wxPoint mouse = ClientToScreen(evt.GetPosition());
+
+        gtk_window_begin_resize_drag(
+            GTK_WINDOW(m_frame->m_widget),
+            edge,
+            1,  // left button
+            mouse.x, mouse.y,
+            gtk_get_current_event_time());
+    }
+
+    MainFrame*    m_frame;
+    Edge          m_edge;
+    const char*   m_last_cursor_name{nullptr};
+};
+#endif // __WXGTK__
+
 #ifdef __APPLE__
 class BambuStudioTaskBarIcon : public wxTaskBarIcon
 {
@@ -227,6 +337,14 @@ DPIFrame(NULL, wxID_ANY, "", wxDefaultPosition, wxDefaultSize, BORDERLESS_FRAME_
 
 #ifdef __WXOSX__
     set_miniaturizable(GetHandle());
+#endif
+
+#ifdef __WXGTK__
+    // The borderless frame style gives the WM no resize border on Linux; add our
+    // own thin transparent edge panels that drive gtk_window_begin_resize_drag.
+    m_edge_bottom = new ResizeEdgePanel(this, ResizeEdgePanel::Bottom);
+    m_edge_left   = new ResizeEdgePanel(this, ResizeEdgePanel::Left);
+    m_edge_right  = new ResizeEdgePanel(this, ResizeEdgePanel::Right);
 #endif
 
 #ifdef _WIN32
@@ -411,6 +529,9 @@ DPIFrame(NULL, wxID_ANY, "", wxDefaultPosition, wxDefaultSize, BORDERLESS_FRAME_
 #endif
         Refresh();
         Layout();
+#ifdef __WXGTK__
+        update_edge_panels();
+#endif
         wxQueueEvent(wxGetApp().plater(), new SimpleEvent(EVT_NOTICE_CHILDE_SIZE_CHANGED));
         });
 
@@ -1113,10 +1234,39 @@ void MainFrame::update_layout()
     Thaw();
 }
 
+#ifdef __WXGTK__
+void MainFrame::update_edge_panels()
+{
+    if (!m_edge_bottom) return;
+
+    bool hide = IsMaximized() || IsFullScreen();
+    m_edge_bottom->Show(!hide);
+    m_edge_left->Show(!hide);
+    m_edge_right->Show(!hide);
+    if (hide) return;
+
+    constexpr int B = ResizeEdgePanel::BORDER_PX;
+    wxSize cs = GetClientSize();
+    m_edge_bottom->SetSize(0, cs.y - B, cs.x, B);
+    m_edge_left->SetSize(0, 0, B, cs.y);
+    m_edge_right->SetSize(cs.x - B, 0, B, cs.y);
+
+    m_edge_bottom->Raise();
+    m_edge_left->Raise();
+    m_edge_right->Raise();
+}
+#endif // __WXGTK__
+
 // Called when closing the application and when switching the application language.
 void MainFrame::shutdown()
 {
     BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << "MainFrame::shutdown enter";
+#ifdef __WXGTK__
+    // Edge panels are child windows — wxWidgets destroys them automatically.
+    m_edge_bottom = nullptr;
+    m_edge_left   = nullptr;
+    m_edge_right  = nullptr;
+#endif
 
     // The rich parameter tooltip is a wxPopupTransientWindow parented to this frame. Both teardown
     // paths funnel through here (app close, and the language-switch GUI rebuild via recreate_GUI),

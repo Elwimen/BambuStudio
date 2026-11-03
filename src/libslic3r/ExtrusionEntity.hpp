@@ -66,6 +66,9 @@ enum ExtrusionRole : uint8_t {
     erFlush,
     // Extrusion role for a collection with multiple extrusion roles.
     erMixed,
+    // G-code/preview only: Z contoured (ZAA) top surface or wall. Kept after erMixed so the values of the
+    // existing roles do not change.
+    erZContoured,
     erCount
 };
 

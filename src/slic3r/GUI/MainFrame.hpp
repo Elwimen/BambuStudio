@@ -49,6 +49,9 @@ class Tab;
 class PrintHostQueueDialog;
 class Plater;
 class MainFrame;
+#ifdef __WXGTK__
+class ResizeEdgePanel;
+#endif // __WXGTK__
 class ParamsDialog;
 class FilamentGroupPopup;
 class DeviceWebPage;
@@ -453,6 +456,14 @@ public:
     bool                m_is_in_move_or_resize { false };
     ULONGLONG           m_last_resize_layout_ms { 0 };
 #endif // _WIN32
+
+#ifdef __WXGTK__
+    friend class ResizeEdgePanel;
+    ResizeEdgePanel* m_edge_bottom{nullptr};
+    ResizeEdgePanel* m_edge_left{nullptr};
+    ResizeEdgePanel* m_edge_right{nullptr};
+    void update_edge_panels();
+#endif // __WXGTK__
 };
 
 wxDECLARE_EVENT(EVT_HTTP_ERROR, wxCommandEvent);

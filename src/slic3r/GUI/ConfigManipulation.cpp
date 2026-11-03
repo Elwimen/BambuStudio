@@ -923,6 +923,22 @@ void ConfigManipulation::apply_null_fff_config(DynamicPrintConfig *config, std::
 
 void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig *config, int variant_index, const bool is_global_config)
 {
+    if (config->has("zaa_enabled")) {
+        const bool zaa = config->opt_bool("zaa_enabled");
+        for (auto el : { "zaa_min_z", "zaa_minimize_perimeter_height", "zaa_top_pattern", "zaa_top_order" })
+            toggle_line(el, zaa);
+    }
+    if (config->has("enable_arc_overhangs")) {
+        const bool arcs = config->opt_bool("enable_arc_overhangs");
+        for (auto el : { "arc_overhang_speed", "arc_overhang_flow_ratio", "arc_overhang_min_speed", "arc_overhang_min_arc_time",
+                         "arc_overhang_travel_speed", "arc_overhang_above_height", "arc_overhang_extra_layers" })
+            toggle_line(el, arcs);
+        const bool above = arcs && config->opt_float("arc_overhang_above_height") > 0.;
+        for (auto el : { "arc_overhang_above_wall_speed", "arc_overhang_above_infill_speed", "arc_overhang_above_fan_speed", "arc_overhang_above_pattern" })
+            toggle_line(el, above);
+        toggle_field("arc_overhang_min_speed", arcs && config->opt_float("arc_overhang_min_arc_time") > 0.);
+    }
+
     bool have_perimeters = config->opt_int("wall_loops") > 0;
     for (auto el : { "ensure_vertical_shell_thickness", "detect_thin_wall", "detect_overhang_wall",
                     "seam_position","seam_placement_away_from_overhangs","seam_gap","wipe_speed", "wall_sequence", "outer_wall_line_width",

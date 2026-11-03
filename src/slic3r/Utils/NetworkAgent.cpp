@@ -259,7 +259,7 @@ int NetworkAgent::initialize_network_module(bool using_backup, bool validate_cer
         module_cert_summary = SummarizeModule(library);
         if (module_cert_summary) {
             if (IsSamePublisher(*self_cert_summary, *module_cert_summary))
-                networking_module = dlopen(library.c_str(), RTLD_LAZY);
+                networking_module = dlopen(library.c_str(), RTLD_LAZY | RTLD_DEEPBIND);
             else
                 BOOST_LOG_TRIVIAL(info) << "module is from another publisher:" << module_cert_summary->as_print();
         }
@@ -267,7 +267,7 @@ int NetworkAgent::initialize_network_module(bool using_backup, bool validate_cer
             BOOST_LOG_TRIVIAL(info) << "module_cert is null";
     }
     else
-        networking_module = dlopen( library.c_str(), RTLD_LAZY);
+        networking_module = dlopen( library.c_str(), RTLD_LAZY | RTLD_DEEPBIND);
     if (!networking_module) {
         char* dll_error = dlerror();
         std::string err       = dll_error ? std::string(dll_error) : std::string("(null)");
@@ -577,14 +577,14 @@ void* NetworkAgent::get_bambu_source_entry()
 #else
     library = plugin_folder.string() + "/" + std::string("lib") + std::string(BAMBU_SOURCE_LIBRARY) + ".so";
 #endif
-    source_module = dlopen( library.c_str(), RTLD_LAZY);
+    source_module = dlopen( library.c_str(), RTLD_LAZY | RTLD_DEEPBIND);
     /*if (!source_module) {
 #if defined(__WXMAC__)
         library = std::string("lib") + BAMBU_SOURCE_LIBRARY + ".dylib";
 #else
         library = std::string("lib") + BAMBU_SOURCE_LIBRARY + ".so";
 #endif
-        source_module = dlopen( library.c_str(), RTLD_LAZY);
+        source_module = dlopen( library.c_str(), RTLD_LAZY | RTLD_DEEPBIND);
     }*/
 #endif
 

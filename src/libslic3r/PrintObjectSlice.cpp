@@ -22,6 +22,24 @@ namespace Slic3r {
 bool PrintObject::clip_multipart_objects = true;
 bool PrintObject::infill_only_where_needed = false;
 
+// Z contouring slices near the bottom of the layer (zaa_min_z above it), so that the top surface of a layer
+// covers everything that rises above that plane and can be contoured down to the model surface.
+static coordf_t compute_slice_z(const PrintObject *print_object, size_t i_layer, coordf_t lo, coordf_t hi)
+{
+    bool     zaa      = false;
+    coordf_t z_offset = 0.;
+    for (size_t rid = 0; rid < print_object->num_printing_regions(); ++rid) {
+        const PrintRegionConfig &rcfg = print_object->printing_region(rid).config();
+        if (rcfg.zaa_enabled) {
+            z_offset = zaa ? std::min(z_offset, coordf_t(rcfg.zaa_min_z.value)) : coordf_t(rcfg.zaa_min_z.value);
+            zaa      = true;
+        }
+    }
+    if (!zaa || i_layer == 0)
+        return 0.5 * (lo + hi);
+    return std::clamp(lo + z_offset, lo, hi);
+}
+
 LayerPtrs new_layers(
     PrintObject                 *print_object,
     // Object layers (pairs of bottom/top Z coordinate), without the raft.
@@ -35,7 +53,7 @@ LayerPtrs new_layers(
     for (size_t i_layer = 0; i_layer < object_layers.size(); i_layer += 2) {
         coordf_t lo = object_layers[i_layer];
         coordf_t hi = object_layers[i_layer + 1];
-        coordf_t slice_z = 0.5 * (lo + hi);
+        coordf_t slice_z = compute_slice_z(print_object, i_layer / 2, lo, hi);
         Layer *layer = new Layer(id ++, print_object, hi - lo, hi + zmin, slice_z);
         out.emplace_back(layer);
         if (prev != nullptr) {

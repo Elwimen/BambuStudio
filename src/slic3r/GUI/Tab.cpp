@@ -3290,6 +3290,12 @@ void TabPrint::build()
         optgroup->append_single_option_line("is_infill_first","parameter/quality-advance-settings");
         optgroup->append_single_option_line("bridge_flow","parameter/bridge");
         optgroup->append_single_option_line("thick_bridges","parameter/bridge");
+        optgroup->append_single_option_line("enable_arc_overhangs");
+        optgroup->append_single_option_line("arc_overhang_flow_ratio");
+        optgroup->append_single_option_line("arc_overhang_extra_layers");
+        optgroup->append_single_option_line("arc_overhang_above_height");
+        optgroup->append_single_option_line("arc_overhang_above_fan_speed");
+        optgroup->append_single_option_line("arc_overhang_above_pattern");
         optgroup->append_single_option_line("counterbore_hole_bridging","parameter/bridge");
         optgroup->append_single_option_line("print_flow_ratio");
         optgroup->append_single_option_line("top_solid_infill_flow_ratio","parameter/quality-advance-settings");
@@ -3304,6 +3310,13 @@ void TabPrint::build()
         optgroup->append_single_option_line("max_travel_detour_distance","parameter/quality-advance-settings");
         optgroup->append_single_option_line("avoid_crossing_wall_includes_support","parameter/quality-advance-settings");
         optgroup->append_single_option_line("z_direction_outwall_speed_continuous", "parameter/quality-advance-settings");
+
+        optgroup = page->new_optgroup(L("Z contouring"), L"param_advanced");
+        optgroup->append_single_option_line("zaa_enabled");
+        optgroup->append_single_option_line("zaa_min_z");
+        optgroup->append_single_option_line("zaa_minimize_perimeter_height");
+        optgroup->append_single_option_line("zaa_top_pattern");
+        optgroup->append_single_option_line("zaa_top_order");
 
     page = add_options_page(L("Strength"), "empty");
         optgroup = page->new_optgroup(L("Walls"), L"param_wall");
@@ -3401,6 +3414,12 @@ void TabPrint::build()
         optgroup->append_single_option_line("slowdown_end_speed", "", 0);
         optgroup->append_single_option_line("slowdown_end_acc", "", 0);
         optgroup->append_single_option_line("bridge_speed", "", 0);
+        optgroup->append_single_option_line("arc_overhang_speed");
+        optgroup->append_single_option_line("arc_overhang_min_speed");
+        optgroup->append_single_option_line("arc_overhang_min_arc_time");
+        optgroup->append_single_option_line("arc_overhang_travel_speed");
+        optgroup->append_single_option_line("arc_overhang_above_wall_speed");
+        optgroup->append_single_option_line("arc_overhang_above_infill_speed");
         optgroup->append_single_option_line("gap_infill_speed", "", 0);
         optgroup->append_single_option_line("support_speed", "", 0);
         optgroup->append_single_option_line("support_interface_speed", "", 0);

@@ -902,6 +902,7 @@ namespace Slic3r
                 const auto& p_sequential_view = get_sequential_view();
                 // layers zs / roles / extruder ids -> extract from result
                 size_t last_travel_s_id = 0;
+                unsigned int last_layer_index = 0;
                 m_extruder_ids.clear();
                 size_t seams_count = 0;
                 std::vector<std::vector<size_t>> t_sid_to_seamMoveIds;
@@ -946,13 +947,19 @@ namespace Slic3r
                         }
 
                         // layers zs
-                        const double z = static_cast<double>(move.position.z());
+                        double z = static_cast<double>(move.position.z());
                         bool needs_new_layer = p_layer_manager->empty();
-                        if (!needs_new_layer) {
+                        // Group by the layer change tags when available: Z varies within a layer with Z contouring.
+                        if (move.layer_index > 0) {
+                            needs_new_layer = needs_new_layer || move.layer_index != last_layer_index;
+                            if (move.print_z > 0.f)
+                                z = static_cast<double>(move.print_z);
+                        } else if (!needs_new_layer) {
                             const auto& last_layer = p_layer_manager->get_layer(p_layer_manager->size() - 1);
                             const auto last_z = last_layer.get_z();
                             needs_new_layer = std::abs(z - last_z) > EPSILON;
                         }
+                        last_layer_index = move.layer_index;
                         if (needs_new_layer) {
                             Layer t_layer;
                             t_layer.set_start(last_travel_s_id)

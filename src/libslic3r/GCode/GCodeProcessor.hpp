@@ -231,6 +231,9 @@ namespace Slic3r {
             int  object_label_id{-1};
             float print_z{0.0f};
             bool is_pa_line_calibration{false};
+            // Layer counter from the layer change tags (0 = before the first). Used by the preview to group moves
+            // into layers, as Z varies within a layer with Z contouring / scarf seams.
+            unsigned int layer_index{0};
 
             float volumetric_rate() const { return feedrate * mm3_per_mm; }
             //BBS: new function to support arc move

@@ -1,0 +1,173 @@
+diff --git a/include/wx/gtk/filedlg.h b/include/wx/gtk/filedlg.h
+index 9e3644493b..2822f92075 100644
+--- a/include/wx/gtk/filedlg.h
++++ b/include/wx/gtk/filedlg.h
+@@ -71,6 +71,15 @@ protected:
+ 
+ private:
+     void OnFakeOk( wxCommandEvent &event );
++
++    // Desktop native file chooser (GtkFileChooserNative, i.e. the XDG desktop portal when
++    // GTK_USE_PORTAL=1 or sandboxed: KDE/GNOME native dialogs). Used by ShowModal() when no
++    // extra control or preview is requested; the GtkFileChooserDialog in m_widget is still
++    // created and used as the source of all settings.
++    int ShowNativeModal();
++    bool          m_nativeUsed = false;
++    wxArrayString m_nativePaths;
++    int           m_nativeFilterIndex = -1;
+     void OnSize(wxSizeEvent&);
+     virtual void AddChildGTK(wxWindowGTK* child) wxOVERRIDE;
+ 
+diff --git a/src/gtk/filedlg.cpp b/src/gtk/filedlg.cpp
+index 6ab3fcae7c..11ad02cecb 100644
+--- a/src/gtk/filedlg.cpp
++++ b/src/gtk/filedlg.cpp
+@@ -377,11 +377,98 @@ int wxFileDialog::ShowModal()
+ {
+     WX_HOOK_MODAL_DIALOG();
+ 
++#if GTK_CHECK_VERSION(3,20,0)
++    // The native chooser cannot host extra widgets or a preview.
++    const char *disable = getenv("WX_GTK_NO_NATIVE_FILE_CHOOSER");
++    if ( !HasExtraControlCreator() && !HasFlag(wxFD_PREVIEW) &&
++         gtk_check_version(3, 20, 0) == NULL && !(disable && *disable == '1') )
++        return ShowNativeModal();
++#endif
++
+     CreateExtraControl();
+ 
+     return wxDialog::ShowModal();
+ }
+ 
++int wxFileDialog::ShowNativeModal()
++{
++#if GTK_CHECK_VERSION(3,20,0)
++    GtkFileChooser* src = GTK_FILE_CHOOSER(m_widget);
++    GtkWindow* parent = gtk_window_get_transient_for(GTK_WINDOW(m_widget));
++    GtkFileChooserNative* native = gtk_file_chooser_native_new(
++        wxGTK_CONV(m_message), parent, gtk_file_chooser_get_action(src), NULL, NULL);
++    GtkFileChooser* dst = GTK_FILE_CHOOSER(native);
++    gtk_native_dialog_set_modal(GTK_NATIVE_DIALOG(native), TRUE);
++
++    gtk_file_chooser_set_select_multiple(dst, gtk_file_chooser_get_select_multiple(src));
++    gtk_file_chooser_set_do_overwrite_confirmation(dst, gtk_file_chooser_get_do_overwrite_confirmation(src));
++
++    // Filters: same objects and order, so filter indices stay valid.
++    GSList* filters = gtk_file_chooser_list_filters(src);
++    for ( GSList* it = filters; it; it = it->next )
++        gtk_file_chooser_add_filter(dst, GTK_FILE_FILTER(it->data));
++    g_slist_free(filters);
++    if ( GtkFileFilter* cur = gtk_file_chooser_get_filter(src) )
++        gtk_file_chooser_set_filter(dst, cur);
++
++    // Initial folder and name, as set up by Create() and the setters.
++    if ( !m_dir.empty() )
++        gtk_file_chooser_set_current_folder(dst, wxGTK_CONV_FN(m_dir));
++    if ( HasFlag(wxFD_SAVE) )
++    {
++        wxGtkString name(gtk_file_chooser_get_current_name(src));
++        if ( name && *name )
++            gtk_file_chooser_set_current_name(dst, name);
++        else if ( !m_fileName.empty() )
++            gtk_file_chooser_set_current_name(dst, wxGTK_CONV_FN(m_fileName));
++    }
++    else if ( !m_fileName.empty() && !m_dir.empty() )
++    {
++        gtk_file_chooser_set_filename(dst, wxGTK_CONV_FN(wxFileName(m_dir, m_fileName).GetFullPath()));
++    }
++
++    const gint res = gtk_native_dialog_run(GTK_NATIVE_DIALOG(native));
++
++    int ret = wxID_CANCEL;
++    if ( res == GTK_RESPONSE_ACCEPT )
++    {
++        m_nativePaths.clear();
++        GSList* files = gtk_file_chooser_get_filenames(dst);
++        for ( GSList* it = files; it; it = it->next )
++        {
++            m_nativePaths.Add(wxString::FromUTF8(static_cast<const char*>(it->data)));
++            g_free(it->data);
++        }
++        g_slist_free(files);
++
++        m_nativeFilterIndex = -1;
++        if ( GtkFileFilter* sel = gtk_file_chooser_get_filter(dst) )
++        {
++            GSList* list = gtk_file_chooser_list_filters(dst);
++            m_nativeFilterIndex = g_slist_index(list, sel);
++            g_slist_free(list);
++        }
++
++        if ( !m_nativePaths.empty() )
++        {
++            m_nativeUsed = true;
++            m_path = m_nativePaths[0];
++            m_dir = wxFileName(m_path).GetPath();
++            m_fileName = wxFileName(m_path).GetFullName();
++            if ( HasFlag(wxFD_CHANGE_DIR) && chdir(m_dir.fn_str()) != 0 )
++                wxLogSysError(_("Changing current directory to \"%s\" failed"), m_dir);
++            ret = wxID_OK;
++        }
++    }
++
++    g_object_unref(native);
++    SetReturnCode(ret);
++    return ret;
++#else
++    return wxID_CANCEL;
++#endif
++}
++
+ void wxFileDialog::DoSetSize(int WXUNUSED(x), int WXUNUSED(y),
+                              int WXUNUSED(width), int WXUNUSED(height),
+                              int WXUNUSED(sizeFlags))
+@@ -397,16 +484,30 @@ void wxFileDialog::OnSize(wxSizeEvent&)
+ wxString wxFileDialog::GetPath() const
+ {
+     wxCHECK_MSG( !HasFlag(wxFD_MULTIPLE), wxString(), "When using wxFD_MULTIPLE, must call GetPaths() instead" );
++    if ( m_nativeUsed )
++        return m_nativePaths.empty() ? wxString() : m_nativePaths[0];
+     return m_fc.GetPath();
+ }
+ 
+ void wxFileDialog::GetFilenames(wxArrayString& files) const
+ {
++    if ( m_nativeUsed )
++    {
++        files.Empty();
++        for ( const wxString& p : m_nativePaths )
++            files.Add(wxFileName(p).GetFullName());
++        return;
++    }
+     m_fc.GetFilenames( files );
+ }
+ 
+ void wxFileDialog::GetPaths(wxArrayString& paths) const
+ {
++    if ( m_nativeUsed )
++    {
++        paths = m_nativePaths;
++        return;
++    }
+     m_fc.GetPaths( paths );
+ }
+ 
+@@ -466,6 +567,9 @@ wxString wxFileDialog::GetFilename() const
+ {
+     wxCHECK_MSG( !HasFlag(wxFD_MULTIPLE), wxString(), "When using wxFD_MULTIPLE, must call GetFilenames() instead" );
+ 
++    if ( m_nativeUsed )
++        return m_fileName;
++
+     wxString currentFilename( m_fc.GetFilename() );
+     if (currentFilename.empty())
+     {
+@@ -489,6 +593,8 @@ void wxFileDialog::SetFilterIndex(int filterIndex)
+ 
+ int wxFileDialog::GetFilterIndex() const
+ {
++    if ( m_nativeUsed && m_nativeFilterIndex >= 0 )
++        return m_nativeFilterIndex;
+     return m_fc.GetFilterIndex();
+ }
+ 
