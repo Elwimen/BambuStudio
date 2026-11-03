@@ -39,6 +39,36 @@ function useReportAmsControlWebHostSize(height: number) {
   }, [height, send]);
 }
 
+// Mod: the host now sizes the webview to the content, so the page never needs to
+// scroll; hide the WebView's own scrollbars on this route (restored on unmount so
+// other routes such as Filament Manager keep theirs).
+function useHideDocumentScrollbars() {
+  useEffect(() => {
+    const html = document.documentElement;
+    const body = document.body;
+    const prev = [html.style.overflow, body.style.overflow];
+    html.style.overflow = 'hidden';
+    body.style.overflow = 'hidden';
+    return () => {
+      html.style.overflow = prev[0];
+      body.style.overflow = prev[1];
+    };
+  }, []);
+}
+
+// Mod: track the host webview width so the fixed-width AMS layout can be scaled
+// to fit the Control pane (which is now resizable via the divider).
+function useViewportWidth() {
+  const [w, setW] = useState(() => (typeof window === 'undefined' ? HOST_WIDTH_DIP : window.innerWidth));
+  useEffect(() => {
+    const onResize = () => setW(window.innerWidth);
+    window.addEventListener('resize', onResize);
+    onResize();
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+  return w;
+}
+
 interface BodyBlock {
   key: string;
   width: number;
@@ -116,16 +146,67 @@ export function AmsControlWebPage() {
       columnShowsPreviewStrip(column, columnPreviewItems(column, preview.items), dualNozzle),
     )
   );
-  useReportAmsControlWebHostSize(
-    display.visible
-      ? amsControlWebContentHeight({
-          hasPreview,
-          slotAreaVisible: amsExt.visible,
-          hasSwitcher: display.switcher_area.visible,
-          hasSetupHint: Boolean(display.switcher_area.show_setup_hint && display.switcher_area.setup_hint),
-        })
-      : 0,
-  );
+  useHideDocumentScrollbars();
+  const viewportWidth = useViewportWidth();
+  const contentHeight = display.visible
+    ? amsControlWebContentHeight({
+        hasPreview,
+        slotAreaVisible: amsExt.visible,
+        hasSwitcher: display.switcher_area.visible,
+        hasSetupHint: Boolean(display.switcher_area.show_setup_hint && display.switcher_area.setup_hint),
+      })
+    : 0;
+  // Only scale DOWN to fit a narrow pane; never up — so at wide panes the box stays
+  // native size and centres like the upper controls, and the height never scales
+  // past the pane (which was clipping the footer buttons).
+  // Mod: fill the pane width minus a small side margin (scales up as well as down).
+  // Safe now that the reported height follows the scaled content.
+  const AMS_SIDE_MARGIN = 8;
+  const fitScale = Math.min(2, Math.max(0.5, (viewportWidth - 2 * AMS_SIDE_MARGIN) / CONTENT_WIDTH));
+  // Measure the real content height (the formula can under-count the footer) so the
+  // host panel is tall enough to show the button row without an internal scroll.
+  const contentRef = useRef<HTMLDivElement>(null);
+  const [measuredHeight, setMeasuredHeight] = useState(0);
+  useEffect(() => {
+    const el = contentRef.current;
+    if (!el) return;
+    // scrollHeight captures descendants that overflow the flow box (the extruder
+    // nozzle is absolutely positioned and taller than its row), which offsetHeight
+    // misses — that was clipping the footer button row.
+    const update = () => setMeasuredHeight(Math.max(el.scrollHeight, el.offsetHeight));
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    update();
+    return () => ro.disconnect();
+    // Re-run when the panel becomes visible: on first mount the content div isn't
+    // rendered yet (display.visible false), so the observer must attach once it is.
+  }, [display.visible]);
+  // +50px breathing room on the AMS box (requested).
+  const AMS_BOX_EXTRA_H = 8;   // was 50; trimmed so the graphics can grow instead
+  const layoutHeight = Math.max(measuredHeight, contentHeight) + AMS_BOX_EXTRA_H;
+
+  // Mod: host-pixel calibration. On fractional-scale Wayland (e.g. 1.25x) the host
+  // applies the reported height in its own pixels while the page measures CSS px,
+  // so the viewport came out reported/1.25 (379 -> 303) and clipped the buttons.
+  // Measure the real ratio (what we reported vs. the viewport we got) and scale the
+  // report by it. Self-correcting on any monitor; 1.0 where units already match.
+  const reportedRef = useRef(0);
+  const [hostScale, setHostScale] = useState(1);
+  useEffect(() => {
+    const onResize = () => {
+      const r = reportedRef.current;
+      const ih = window.innerHeight;
+      if (r > 0 && ih > 0) {
+        const k = r / ih;
+        if (k > 1.02 && k < 3) setHostScale((prev) => (Math.abs(prev - k) > 0.01 ? k : prev));
+      }
+    };
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+  const reportHeight = Math.round(layoutHeight * fitScale * hostScale);
+  reportedRef.current = reportHeight;
+  useReportAmsControlWebHostSize(reportHeight);
 
   if (!display.visible) {
     return <div data-testid="ams-control-web-page" className="hidden" />;
@@ -223,16 +304,57 @@ export function AmsControlWebPage() {
   const splitColumns = columnBlocks.length > 1;
   const columnWidth = splitColumns ? CONTENT_WIDTH / columnBlocks.length : CONTENT_WIDTH;
 
-  const laidOut: ColumnLayout[] = columnBlocks.map((entry, index) => {
+  const laidOutBase: ColumnLayout[] = columnBlocks.map((entry, index) => {
     const innerWidth =
       entry.blocks.reduce((sum, block) => sum + block.width, 0)
       + Math.max(entry.blocks.length - 1, 0) * COLUMN_GAP;
+    const isExtColumn =
+      entry.blocks.length > 0 && entry.blocks.every((block) => block.key.startsWith('ext-'));
     // wxALIGN_CENTER integer-divides leftover space. A 264px AMS in a 289px
     // half-row is 12.5px; floor it so overlay x stays on whole pixels.
-    const pad = Math.floor((columnWidth - innerWidth) / 2);
+    // Mod: the Ext column uses a half-width backplate (see the body render). Left-
+    // align it to the column's inner edge instead of centring the 78px card in the
+    // 289px half-row, so the gap to the AMS box is condensed. The box, card and
+    // road all follow because each is anchored at columnWidth*index + pad.
+    const extPlateWidth = Math.round((columnWidth - COLUMN_GAP) / 2);
+    const pad = isExtColumn
+      ? Math.max(0, Math.round((extPlateWidth - innerWidth) / 2))
+      : Math.floor((columnWidth - innerWidth) / 2);
     const origin = snapRoadX(columnWidth * index + pad);
     return { ...entry, innerWidth, pad, origin };
   });
+
+  // Mod: centre the AMS+Ext group as a whole. After the Ext plate was halved and
+  // pulled left, the pair sat left of centre with dead space on the right. Measure
+  // the visible plate extents of all columns and shift the whole row (and the road
+  // overlay origins with it) so the group is centred in CONTENT_WIDTH.
+  let groupShift = 0;
+  let groupWidth = CONTENT_WIDTH;   // visible width of the AMS+Ext group (content px)
+  if (splitColumns && laidOutBase.length > 0) {
+    let left = Infinity;
+    let right = -Infinity;
+    laidOutBase.forEach((entry, index) => {
+      const isExt = entry.blocks.length > 0 && entry.blocks.every((block) => block.key.startsWith('ext-'));
+      const colLeft = columnWidth * index;
+      if (isExt) {
+        const plateW = Math.round((columnWidth - COLUMN_GAP) / 2);
+        const l = colLeft + entry.pad + entry.innerWidth / 2 - plateW / 2;
+        left = Math.min(left, l);
+        right = Math.max(right, l + plateW);
+      } else {
+        left = Math.min(left, colLeft + COLUMN_GAP / 2);
+        right = Math.max(right, colLeft + columnWidth - COLUMN_GAP / 2);
+      }
+    });
+    if (Number.isFinite(left) && Number.isFinite(right)) {
+      groupShift = Math.round(CONTENT_WIDTH / 2 - (left + right) / 2);
+      groupWidth = Math.round(right - left);
+    }
+  }
+  const laidOut: ColumnLayout[] = laidOutBase.map((entry) => ({
+    ...entry,
+    origin: snapRoadX(entry.origin + groupShift),
+  }));
 
   const nozzleXOf = (extruderId: number) => {
     const names = extruders.map((extruder) => extruderIconName(display.extruder_area.extruders, extruder));
@@ -267,8 +389,28 @@ export function AmsControlWebPage() {
     <div
       data-testid="ams-control-web-page"
       className="ams-control-web-page relative flex w-full flex-col items-center py-[4px]"
+      style={{ background: 'var(--ams-web-host-pane-bg)' }}
     >
-      <div className="relative flex flex-col" style={{ width: px(CONTENT_WIDTH) }}>
+      <div style={{ width: px(CONTENT_WIDTH * fitScale), height: px(layoutHeight * fitScale) }}>
+      <div
+        ref={contentRef}
+        className="relative flex flex-col"
+        style={{ width: px(CONTENT_WIDTH), transform: `scale(${fitScale})`, transformOrigin: 'top left', isolation: 'isolate' }}
+      >
+        {/* Mod: content-hugging box behind the AMS+Ext group (no side padding). */}
+        <div
+          aria-hidden
+          style={{
+            position: 'absolute',
+            zIndex: -1,
+            top: 0,
+            left: px(Math.round((CONTENT_WIDTH - groupWidth) / 2)),
+            width: px(groupWidth),
+            height: px(layoutHeight),
+            background: 'var(--ams-web-host-box-bg)',
+            borderRadius: px(4),
+          }}
+        />
         {preview.visible && mixedPreview ? (
           <>
             <div
@@ -287,7 +429,7 @@ export function AmsControlWebPage() {
               className="flex"
               style={
                 splitColumns
-                  ? { width: px(CONTENT_WIDTH) }
+                  ? { width: px(CONTENT_WIDTH), transform: `translateX(${groupShift}px)` }
                   : { justifyContent: 'center', gap: px(COLUMN_GAP), width: px(CONTENT_WIDTH) }
               }
             >
@@ -323,9 +465,25 @@ export function AmsControlWebPage() {
         <div className="relative overflow-visible" style={{ width: px(CONTENT_WIDTH), minHeight: px(overlayStageHeight(amsExt.visible)) }}>
           <div
             className="flex"
-            style={splitColumns ? { gap: 0 } : { marginLeft: px(laidOut[0]?.origin ?? 0), gap: px(COLUMN_GAP) }}
+            style={splitColumns ? { gap: 0, marginLeft: px(groupShift) } : { marginLeft: px(laidOut[0]?.origin ?? 0), gap: px(COLUMN_GAP) }}
           >
-            {laidOut.map((entry) => (
+            {laidOut.map((entry) => {
+              // Mod: narrow an Ext-only column's backplate to half width and
+              // centre it on the ext card, so the "Ext" box is ~2x narrower
+              // instead of matching the full AMS-column width. The ext card stays
+              // at x = entry.pad (where the road overlay, anchored at
+              // entry.origin + pad, expects it), so the filament road stays aligned.
+              const isExtColumn =
+                entry.blocks.length > 0 && entry.blocks.every((block) => block.key.startsWith('ext-'));
+              const fullPlate = columnWidth - COLUMN_GAP;
+              const plateWidth = isExtColumn ? Math.round(fullPlate / 2) : fullPlate;
+              const plateMarginLeft = isExtColumn
+                ? Math.max(0, Math.round(entry.pad + entry.innerWidth / 2 - plateWidth / 2))
+                : COLUMN_GAP / 2;
+              const platePaddingLeft = isExtColumn
+                ? Math.max(0, Math.round((plateWidth - entry.innerWidth) / 2))
+                : Math.max(0, entry.pad - COLUMN_GAP / 2);
+              return (
               <div
                 key={entry.column.pos}
                 className="flex flex-col"
@@ -348,12 +506,13 @@ export function AmsControlWebPage() {
                       background: COLORS.unitBg,
                       ...(splitColumns
                         ? {
-                            width: px(columnWidth - COLUMN_GAP),
-                            marginLeft: px(COLUMN_GAP / 2),
+                            width: px(plateWidth),
+                            marginLeft: px(plateMarginLeft),
                             // Half the seam comes off each side, so the pad has
                             // to shed the same amount or the blocks would slide
-                            // right and leave the road origin behind.
-                            paddingLeft: px(Math.max(0, entry.pad - COLUMN_GAP / 2)),
+                            // right and leave the road origin behind. (For the Ext
+                            // column these are recomputed above for a half-width plate.)
+                            paddingLeft: px(platePaddingLeft),
                           }
                         : null),
                     }}
@@ -364,7 +523,8 @@ export function AmsControlWebPage() {
                   </div>
                 ) : null}
               </div>
-            ))}
+              );
+            })}
           </div>
           <div style={{ height: px(DOWN_ROAD.height) }} />
           <RoadOverlay
@@ -397,6 +557,7 @@ export function AmsControlWebPage() {
 
         <SwitcherSetupHint switcher={display.switcher_area} />
 
+      </div>
       </div>
 
       {error ? <div className="mt-1 text-xs text-red-600">{error}</div> : null}

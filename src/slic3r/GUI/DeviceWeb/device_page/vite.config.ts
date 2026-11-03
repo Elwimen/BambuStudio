@@ -79,9 +79,11 @@ export default defineConfig({
         format: 'iife',
         name: 'DevicePageApp',
         inlineDynamicImports: true,
-        entryFileNames: 'assets/[name].js',
-        chunkFileNames: 'assets/[name].js',
-        assetFileNames: 'assets/[name].[ext]'
+        // Content-hashed so the WebView can't serve a stale cached bundle across
+        // rebuilds (index.html is regenerated to reference the hashed name).
+        entryFileNames: 'assets/[name]-[hash].js',
+        chunkFileNames: 'assets/[name]-[hash].js',
+        assetFileNames: 'assets/[name]-[hash].[ext]'
       }
     },
     // Use terser instead of esbuild so we can reserve the name "wx".

@@ -585,6 +585,11 @@ protected:
     StepIndicator*  m_calibration_flow;
 
     wxPanel *       m_machine_ctrl_panel;
+    // Draggable divider between the Camera (left) and Control (right) panes.
+    wxPanel *       m_pane_divider{ nullptr };
+    bool            m_divider_dragging{ false };
+    int             m_divider_drag_start_x{ 0 };
+    int             m_ctrl_pane_width{ 0 };
     wxPanel *       m_scale_panel;
     wxStaticBitmap* m_img_filament_loading;
     PrintingTaskPanel *       m_project_task_panel;

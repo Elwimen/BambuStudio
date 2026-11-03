@@ -2,6 +2,8 @@ import {
   CONTENT_WIDTH,
   DOWN_ROAD,
   EXTRUDER,
+  FOOTER_BUTTON,
+  FOOTER_BUTTONS_ROW_GAP,
   HUMIDITY,
   LITE_CAN,
   LITE_GRID_GAP,
@@ -137,6 +139,8 @@ export function amsControlWebContentHeight(opts: {
     + overlayStageHeight(opts.slotAreaVisible)
     + (opts.hasSwitcher ? SWITCHER.height : 0)
     + EXTRUDER.height
+    // Mod: action buttons moved to their own centered row below the extruder.
+    + FOOTER_BUTTONS_ROW_GAP + FOOTER_BUTTON.height
     + (opts.hasSetupHint ? SETUP_HINT_HEIGHT : 0)
     + HOST_HEIGHT_SLACK;
 }

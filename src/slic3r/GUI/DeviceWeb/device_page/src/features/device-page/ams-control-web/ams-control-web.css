@@ -1,4 +1,9 @@
 .ams-control-web-page {
+  /* Mod: page bg matches the surrounding wx Control pane (m_machine_ctrl_panel is
+     *wxWHITE, darkened to #2d2d31 in dark mode) so the full-width webview's side
+     strips vanish; only the content-hugging box keeps the AMS area colour. */
+  --ams-web-host-pane-bg: #ffffff;
+  --ams-web-host-box-bg: var(--color-fm-base);
   --ams-web-brand: #00ae42;
   --ams-web-gray700: #6b6b6b;
   --ams-web-gray800: #323a3d;
@@ -43,6 +48,9 @@
 }
 
 [data-theme='dark'] .ams-control-web-page {
+  --ams-web-host-pane-bg: #2d2d31;
+  /* Mod: box was --color-fm-base (#1a1a1a); match the surrounding pane grey. */
+  --ams-web-host-box-bg: #2d2d31;
   --ams-web-gray700: #a6a9aa;
   --ams-web-gray800: #d8dcdd;
   --ams-web-gray500: #6e7375;
@@ -51,10 +59,10 @@
   /* StateColor Grey300 (#EEEEEE) -> #4C4C55; humidity capsule and AMS block. */
   --ams-web-block-bg: #4c4c55;
   --ams-web-chip-bg: #383d40;
-  --ams-web-unit-bg: #36363c;
+  --ams-web-unit-bg: #2d2d31;   /* Mod: was #36363c */
   --ams-web-remain-track: #4a4f51;
   --ams-web-remain-frame: #9a9a98;
-  --ams-web-lite-lib-bg: #36363c;
+  --ams-web-lite-lib-bg: #2d2d31;   /* Mod: was #36363c */
   --ams-web-disabled: #3a3f41;
   --ams-web-disabled-text: #75797b;
   --ams-web-surface: #1c1f21;
